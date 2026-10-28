@@ -5,7 +5,8 @@
 ## 1. The idea in one minute
 
 **Awaaz Pay is a voice-first wallet for people who cannot read or see a screen.** They speak in Hindi, Hinglish or English. The app understands, explains every payment in plain words, protects them from scams, and moves real money through the PayPal sandbox.
-
+** Do not limit the app only for hindi or hinglish make english also improtatn 
+** In starting of setup user are asked which language to usee 
 **Pitch line:** “Meena can’t read. Her son in Dubai sends her money. She hears it, understands it, pays the vegetable seller by voice, and when a scammer calls, the app stops her.”
 
 **Three things that make it different from generic “talk to your wallet” projects:**
