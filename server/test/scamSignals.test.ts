@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { combineRisk, detectScamSignals } from '../src/safety/scamSignals.js';
 
 describe('Rule-Based Scam Signal Detector', () => {
-  // 18+ Scam Examples across categories and languages (English, Devanagari Hindi, Roman Hinglish)
   const scamExamples = [
     {
       text: 'jaldi 500 bhej do abhi time khatam ho raha hai',
@@ -160,7 +159,6 @@ describe('Rule-Based Scam Signal Detector', () => {
     },
   ];
 
-  // 14 Harmless / Routine Everyday Phrases
   const benignExamples = [
     'Mere paas kitna paisa hai?',
     'Balance check karo please',
