@@ -1,0 +1,1 @@
+Design rules for any frontend work are in docs/DESIGN.md and in the DESIGN SPEC section of the prompts doc. If a file or rule is missing, ask me instead of guessing.
