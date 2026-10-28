@@ -12,6 +12,7 @@ dotenv.config();
 const envSchema = z.object({
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  PUBLIC_BASE_URL: z.string().url().optional(),
   PAYPAL_CLIENT_ID: z.string().optional(),
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_API_BASE: z.string().url().default('https://api-m.sandbox.paypal.com'),

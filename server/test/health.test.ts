@@ -2,8 +2,8 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { app } from '../src/app.js';
 
-describe('GET /api/health', () => {
-  it('returns status ok and valid current time', async () => {
+describe('Server Endpoints', () => {
+  it('GET /api/health returns status ok and valid current time', async () => {
     const response = await request(app).get('/api/health');
 
     expect(response.status).toBe(200);
@@ -13,5 +13,10 @@ describe('GET /api/health', () => {
     // Ensure the returned time string is a valid ISO timestamp
     const parsedDate = new Date(response.body.time);
     expect(Number.isNaN(parsedDate.getTime())).toBe(false);
+  });
+
+  it('GET /api/unknown-route returns 404', async () => {
+    const response = await request(app).get('/api/unknown-route');
+    expect(response.status).toBe(404);
   });
 });
