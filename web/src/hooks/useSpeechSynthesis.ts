@@ -4,6 +4,7 @@ export interface UseSpeechSynthesisOptions {
   defaultLang?: string;
   defaultSpeed?: number;
   outputMode?: 'voice' | 'screen_reader';
+  onEnd?: () => void;
 }
 
 export interface UseSpeechSynthesisReturn {
@@ -13,7 +14,10 @@ export interface UseSpeechSynthesisReturn {
   isSupported: boolean;
   outputMode: 'voice' | 'screen_reader';
   setOutputMode: (mode: 'voice' | 'screen_reader') => void;
-  speak: (text: string, options?: { lang?: string; speed?: number }) => void;
+  speak: (
+    text: string,
+    options?: { lang?: string; speed?: number; onEnd?: () => void }
+  ) => void;
   stop: () => void;
   repeatLastReply: () => void;
   setSpeed: (speed: number) => void;
@@ -22,7 +26,12 @@ export interface UseSpeechSynthesisReturn {
 export function useSpeechSynthesis(
   options: UseSpeechSynthesisOptions = {}
 ): UseSpeechSynthesisReturn {
-  const { defaultLang = 'hi-IN', defaultSpeed = 1.0, outputMode: initialMode = 'voice' } = options;
+  const {
+    defaultLang = 'en-IN',
+    defaultSpeed = 1.0,
+    outputMode: initialMode = 'voice',
+    onEnd,
+  } = options;
 
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speed, setSpeedState] = useState(defaultSpeed);
@@ -36,6 +45,9 @@ export function useSpeechSynthesis(
   const [lastSpokenText, setLastSpokenText] = useState('');
   const [isSupported, setIsSupported] = useState(true);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
 
   const outputModeRef = useRef(outputMode);
   outputModeRef.current = outputMode;
@@ -103,7 +115,10 @@ export function useSpeechSynthesis(
   }, []);
 
   const speak = useCallback(
-    (text: string, opts: { lang?: string; speed?: number } = {}) => {
+    (
+      text: string,
+      opts: { lang?: string; speed?: number; onEnd?: () => void } = {}
+    ) => {
       if (!text || typeof window === 'undefined' || !('speechSynthesis' in window)) {
         return;
       }
@@ -128,6 +143,11 @@ export function useSpeechSynthesis(
 
       utterance.onend = () => {
         setIsSpeaking(false);
+        if (opts.onEnd) {
+          opts.onEnd();
+        } else if (onEndRef.current) {
+          onEndRef.current();
+        }
       };
 
       utterance.onerror = () => {
@@ -138,6 +158,11 @@ export function useSpeechSynthesis(
 
       // In Screen Reader mode, TalkBack/VoiceOver handles reading the live region directly.
       if (outputModeRef.current === 'screen_reader') {
+        if (opts.onEnd) {
+          opts.onEnd();
+        } else if (onEndRef.current) {
+          onEndRef.current();
+        }
         return;
       }
 

@@ -22,7 +22,11 @@ function buildProviders(): Provider[] {
     });
   }
 
-  if (config.GROQ_API_KEY && config.GROQ_MODEL) {
+  if (
+    config.GROQ_API_KEY &&
+    config.GROQ_MODEL &&
+    !config.GROQ_API_KEY.includes('your_groq_api_key')
+  ) {
     providers.push({
       name: 'groq',
       call: (s, u) => callGroq(config.GROQ_API_KEY!, config.GROQ_MODEL!, s, u),

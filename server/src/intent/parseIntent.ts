@@ -1,6 +1,6 @@
 import { completeJson } from '../llm/index.js';
 import { buildSystemPrompt } from './systemPrompt.js';
-import { quickConfirmation, regexFallback, detectLang } from './fallback.js';
+import { quickConfirmation, regexFallback, detectLang, extractPaymentDetails } from './fallback.js';
 import { IntentSchema } from './types.js';
 import type { IntentResult, ConversationState } from './types.js';
 
@@ -64,6 +64,22 @@ export async function parseIntent(
       userText: transcript,
       schema: IntentSchema,
     });
+    const details = extractPaymentDetails(transcript, contacts);
+    const explicitMoneyRequest = /\b(send|pay|transfer|bhej(?:na|o|do)?|rupaye? bhej)\b/i.test(transcript);
+    if (
+      result.intent === 'send_money' ||
+      (result.intent === 'unknown' && explicitMoneyRequest &&
+        (details.amount !== null || details.recipient_alias !== null))
+    ) {
+      return postProcess({
+        ...result,
+        intent: 'send_money',
+        amount: result.amount ?? details.amount,
+        recipient_alias: result.recipient_alias ?? details.recipient_alias,
+        confidence: Math.max(result.confidence, details.amount !== null || details.recipient_alias !== null ? 0.8 : 0),
+        clarifying_question: null,
+      });
+    }
     return postProcess(result);
   } catch (err) {
     if ((err as Error).name === 'LLMUnavailableError') {

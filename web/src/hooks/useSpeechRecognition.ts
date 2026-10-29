@@ -4,6 +4,7 @@ import type {
   SpeechRecognitionEvent,
   SpeechRecognitionErrorEvent,
 } from '../types/speech.d.ts';
+import { triggerHaptic } from './useHaptics.js';
 
 export interface UseSpeechRecognitionOptions {
   lang?: string;
@@ -19,16 +20,6 @@ export interface UseSpeechRecognitionReturn {
   startListening: () => void;
   stopListening: () => void;
   toggleListening: () => void;
-}
-
-function triggerHaptic(pattern: number | number[]): void {
-  try {
-    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      navigator.vibrate(pattern);
-    }
-  } catch {
-    // Ignore environments where vibration is unsupported or blocked
-  }
 }
 
 export function useSpeechRecognition(
@@ -51,24 +42,39 @@ export function useSpeechRecognition(
     langRef.current = lang;
   }, [onResult, onError, lang]);
 
-  useEffect(() => {
+  const createRecognition = useCallback(() => {
     const SpeechRecognitionClass =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognitionClass) {
       setIsSupported(false);
-      return;
+      return null;
+    }
+
+    // Clean up existing instance safely
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.abort();
+      } catch {
+        // Ignore
+      }
+      recognitionRef.current = null;
     }
 
     const recognition = new SpeechRecognitionClass();
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
+    recognition.lang = langRef.current;
 
     recognition.onstart = () => {
       setIsListening(true);
       setError(null);
-      triggerHaptic([50]);
+      triggerHaptic('listeningStart');
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -84,7 +90,7 @@ export function useSpeechRecognition(
       if (finalTranscript.trim()) {
         const clean = finalTranscript.trim();
         setTranscript(clean);
-        triggerHaptic([40, 60, 40]);
+        triggerHaptic('understood');
         if (onResultRef.current) {
           onResultRef.current(clean);
         }
@@ -92,27 +98,61 @@ export function useSpeechRecognition(
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      console.warn('[SpeechRecognition] error encountered:', event.error, event);
       setIsListening(false);
-      triggerHaptic([100, 50, 100]);
 
-      let friendly = 'Kuch gadbad hui. Dobara koshish karein.';
-      if (langRef.current.startsWith('en')) {
-        friendly = 'Something went wrong. Please try again.';
+      // 'aborted' is benign — triggered when stopping, restarting, or tab blur
+      if (event.error === 'aborted') {
+        return;
       }
 
-      if (event.error === 'no-speech') {
-        friendly =
-          langRef.current.startsWith('hi')
-            ? 'Koi aawaz nahi suni gayi. Dobara boliye.'
-            : 'No speech detected. Please tap and speak again.';
-      } else if (
-        event.error === 'not-allowed' ||
-        event.error === 'service-not-allowed'
-      ) {
-        friendly =
-          langRef.current.startsWith('hi')
-            ? 'Microphone ki permission nahi mili. Kripya microphone access allow karein.'
-            : 'Microphone permission denied. Please allow microphone access in your browser settings.';
+      triggerHaptic('error');
+
+      const isHi = langRef.current.startsWith('hi');
+      let friendly = '';
+
+      switch (event.error) {
+        case 'no-speech':
+          friendly = isHi
+            ? 'कोई आवाज़ नहीं सुनी गई। कृपया माइक दबाकर दोबारा बोलें।'
+            : 'No speech detected. Please tap the mic and speak again.';
+          break;
+
+        case 'not-allowed':
+          friendly = isHi
+            ? 'माइक्रोफ़ोन की अनुमति नहीं मिली। कृपया ब्राउज़र एड्रेस बार में माइक्रोफ़ोन की अनुमति (Allow) दें।'
+            : 'Microphone permission was denied. Please allow microphone access in your browser address bar.';
+          break;
+
+        case 'service-not-allowed':
+          friendly = isHi
+            ? 'इस ब्राउज़र में स्पीच रिकग्निशन सेवा बंद है। कृपया Google Chrome या Microsoft Edge का उपयोग करें।'
+            : 'Speech recognition service is disabled or blocked in this browser (e.g. Brave blocks Google Speech by default). Please use Chrome or Edge.';
+          break;
+
+        case 'network':
+          friendly = isHi
+            ? 'स्पीच रिकग्निशन में नेटवर्क समस्या है। यदि आप Brave ब्राउज़र में हैं, तो कृपया Chrome या Edge का उपयोग करें, या इंटरनेट कनेक्शन चेक करें।'
+            : 'Network error with speech recognition. If you are using Brave browser, it blocks Google speech servers by default — please open the app in Chrome or Edge.';
+          break;
+
+        case 'audio-capture':
+          friendly = isHi
+            ? 'माइक्रोफ़ोन नहीं मिला या काम नहीं कर रहा है। कृपया माइक्रोफ़ोन कनेक्ट करें।'
+            : 'No microphone was found or microphone is not working. Please check your mic connection.';
+          break;
+
+        case 'language-not-supported':
+          friendly = isHi
+            ? 'यह भाषा इस ब्राउज़र में समर्थित नहीं है।'
+            : 'Selected language is not supported by your browser.';
+          break;
+
+        default:
+          friendly = isHi
+            ? `स्पीच में समस्या आई (${event.error})। कृपया दोबारा कोशिश करें या Chrome/Edge का उपयोग करें।`
+            : `Speech recognition error (${event.error}). Please try again or use Chrome/Edge.`;
+          break;
       }
 
       setError(friendly);
@@ -126,32 +166,60 @@ export function useSpeechRecognition(
     };
 
     recognitionRef.current = recognition;
+    return recognition;
+  }, []);
+
+  useEffect(() => {
+    const SpeechRecognitionClass =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognitionClass) {
+      setIsSupported(false);
+      return;
+    }
+
+    setIsSupported(true);
 
     return () => {
-      try {
-        recognition.abort();
-      } catch {
-        // Recognition already closed
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.onstart = null;
+          recognitionRef.current.onend = null;
+          recognitionRef.current.onerror = null;
+          recognitionRef.current.onresult = null;
+          recognitionRef.current.abort();
+        } catch {
+          // Ignore
+        }
+        recognitionRef.current = null;
       }
     };
   }, []);
 
   const startListening = useCallback(() => {
-    if (!recognitionRef.current) return;
     setError(null);
     setTranscript('');
     try {
-      recognitionRef.current.lang = langRef.current;
-      recognitionRef.current.start();
-    } catch {
-      try {
-        recognitionRef.current.abort();
-        recognitionRef.current.start();
-      } catch {
-        // Ignore duplicate start errors
-      }
+      const recognition = createRecognition();
+      if (!recognition) return;
+      recognition.start();
+    } catch (err) {
+      console.warn('[SpeechRecognition] Failed to start:', err);
+      const startError = err as Error & { name?: string };
+      const friendly = startError.name === 'NotAllowedError'
+        ? 'Microphone permission is blocked. Allow microphone access in your browser site settings.'
+        : 'Voice recognition could not start. Check your microphone, internet connection, and browser support.';
+      setIsListening(false);
+      setError(friendly);
+      triggerHaptic('error');
+      const code = startError.name === 'NotAllowedError'
+        ? 'not-allowed'
+        : startError.name === 'InvalidStateError'
+          ? 'invalid-state'
+          : 'start-failed';
+      onErrorRef.current?.(code, friendly);
     }
-  }, []);
+  }, [createRecognition]);
 
   const stopListening = useCallback(() => {
     if (!recognitionRef.current) return;

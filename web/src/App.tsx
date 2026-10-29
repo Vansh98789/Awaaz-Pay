@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition.js';
 import { useSpeechSynthesis } from './hooks/useSpeechSynthesis.js';
@@ -21,6 +21,7 @@ import { DesignPreviewPage } from './pages/DesignPreviewPage.js';
 import { ActivityScreen } from './pages/ActivityScreen.js';
 import { ConfirmPaymentScreen } from './pages/ConfirmPaymentScreen.js';
 import { QRScannerModal } from './components/QRScannerModal.js';
+import { parseVoiceCommand } from './voice/commands.js';
 
 interface TranscriptEntry {
   id: string;
@@ -40,6 +41,45 @@ interface PendingConfirmationState {
   blockedReason?: string;
   isProcessing?: boolean;
   isSuccess?: boolean;
+  isPending?: boolean;
+  isApprovalPending?: boolean;
+  isFailed?: boolean;
+  statusMessage?: string;
+  transactionId?: string;
+  paypalBatchId?: string;
+  invoiceId?: string;
+  paymentMode?: 'paypal_invoice' | 'awaaz_pay_payout';
+}
+
+interface ScannedRecipient {
+  name: string;
+  email: string;
+}
+
+function parseScannedRecipient(qrData: string): ScannedRecipient | null {
+  const raw = qrData.trim();
+  let name = '';
+  let email = '';
+
+  try {
+    if (raw.startsWith('{')) {
+      const payload = JSON.parse(raw) as Record<string, unknown>;
+      if (payload.type !== 'awaaz-pay-recipient') return null;
+      name = typeof payload.name === 'string' ? payload.name.trim() : '';
+      email = typeof payload.paypalEmail === 'string' ? payload.paypalEmail.trim() : '';
+    } else if (/^awaazpay:\/\/recipient/i.test(raw)) {
+      const url = new URL(raw);
+      name = url.searchParams.get('name')?.trim() ?? '';
+      email = url.searchParams.get('email')?.trim() ?? '';
+    }
+  } catch {
+    return null;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  if (!name) name = email.split('@')[0].replace(/[._-]+/g, ' ').trim();
+  if (name.length < 1 || name.length > 80) return null;
+  return { name, email };
 }
 
 export const App: React.FC = () => {
@@ -63,14 +103,27 @@ export const App: React.FC = () => {
     return { path: 'wallet' };
   });
 
-  const [lang, setLang] = useState<'hi-IN' | 'en-IN'>('hi-IN');
+  const [lang, setLang] = useState<'hi-IN' | 'en-IN'>('en-IN');
   const [authState, setAuthState] = useState<'checking' | 'unauthenticated' | 'authenticated'>('checking');
   const [authError, setAuthError] = useState<string | null>(null);
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
+  const [textInput, setTextInput] = useState('');
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
+  const [micPermissionReady, setMicPermissionReady] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isOffline, setIsOffline] = useState(() => (typeof navigator !== 'undefined' ? !navigator.onLine : false));
   const [isThinking, setIsThinking] = useState(false);
+  const [isContinuousVoice, setIsContinuousVoice] = useState(true);
+
+  const continuousVoiceRef = useRef(isContinuousVoice);
+  continuousVoiceRef.current = isContinuousVoice;
+
+  const authStateRef = useRef(authState);
+  authStateRef.current = authState;
+
+  const startListeningRef = useRef<() => void>(() => {});
 
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmationState>({
     isOpen: false,
@@ -82,10 +135,20 @@ export const App: React.FC = () => {
     typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `sess-${Date.now()}`
   );
 
+  const handleSpeechEnd = useCallback(() => {
+    // Blind-First Hands-Free Voice: automatically resume listening after assistant speaks
+    if (continuousVoiceRef.current && authStateRef.current === 'authenticated') {
+      setTimeout(() => {
+        startListeningRef.current();
+      }, 350);
+    }
+  }, []);
+
   const { speak, repeatLastReply, isSpeaking, speed, setSpeed, outputMode, setOutputMode } =
     useSpeechSynthesis({
       defaultLang: lang,
       defaultSpeed: 1.0,
+      onEnd: handleSpeechEnd,
     });
 
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([
@@ -95,7 +158,7 @@ export const App: React.FC = () => {
       text:
         lang === 'hi-IN'
           ? 'नमस्ते। बोलिए, मैं सुन रही हूँ।'
-          : 'Say it. Hear it. Pay safely. Tap the mic to talk.',
+          : 'Say it. Hear it. Pay safely. Tap the mic or speak to start.',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -193,20 +256,153 @@ export const App: React.FC = () => {
     };
     setTranscripts((prev) => [...prev, userEntry]);
 
+    const command = parseVoiceCommand(text);
+    const normalized = text
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(/[.,!?;:।]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
     // Handle voice answers to confirmation screen if open
     if (pendingConfirmation.isOpen) {
-      const lower = text.toLowerCase();
-      if (lower.includes('haan') || lower.includes('yes') || lower.includes('kar do') || lower.includes('theek')) {
+      const affirmative = /^(?:haan|ha|ji|yes|yeah|y|ok|okay|confirm|confirm payment|pay now|bhej do|bhej dijiye|kar do|theek hai|bilkul|हाँ|हां|जी|कर दो|भेज दो)$/i.test(normalized);
+      const negative = /^(?:nahi|nahin|no|nope|cancel|stop|ruko|mat bhejo|don't pay|do not pay|नहीं|नही|रोक दो|मत भेजो)$/i.test(normalized);
+      if (affirmative) {
+        setIsThinking(false);
         handleExecutePayment();
         return;
       }
-      if (lower.includes('nahi') || lower.includes('no') || lower.includes('cancel') || lower.includes('mat')) {
+      if (negative) {
         setPendingConfirmation({ isOpen: false, payeeName: '', amount: 0 });
         const cancelMsg = lang === 'hi-IN' ? 'Payment cancel kar diya gaya.' : 'Payment cancelled.';
         speak(cancelMsg, { lang });
         setIsThinking(false);
         return;
       }
+      if (command !== 'repeat' && command !== 'help') {
+        setIsThinking(false);
+        const confirmMsg = lang === 'hi-IN'
+          ? 'Payment abhi nahi bheja gaya. Bhejne ke liye haan, cancel karne ke liye nahi boliye.'
+          : 'The payment has not been sent. Say yes to send it, or no to cancel.';
+        setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: confirmMsg, time: nowTime }]);
+        speak(confirmMsg, { lang });
+        return;
+      }
+    }
+
+    if (command) {
+      if (command === 'repeat') {
+        setIsThinking(false);
+        repeatLastReply();
+        return;
+      }
+      if (command === 'stop_listening') {
+        setIsThinking(false);
+        setIsContinuousVoice(false);
+        continuousVoiceRef.current = false;
+        stopListening();
+        const reply = lang === 'hi-IN'
+          ? 'Sunna rok diya. Dobara bolne ke liye mic button dabayein.'
+          : 'Listening stopped. Tap the microphone button when you want to speak again.';
+        setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+        speak(reply, { lang });
+        return;
+      }
+      if (command === 'check_paypal_balance') {
+        try {
+          const res = await fetch('/api/family/paypal-balance');
+          const data = await res.json();
+          if (!res.ok || !data.success) throw new Error(data.error || 'PayPal balance is unavailable.');
+          const available = new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: 'USD',
+          }).format(Number(data.available));
+          const refreshed = data.asOf
+            ? (lang === 'hi-IN'
+              ? ` Report time ${new Date(data.asOf).toLocaleString()}.`
+              : ` Report time: ${new Date(data.asOf).toLocaleString()}.`)
+            : '';
+          const reply = lang === 'hi-IN'
+            ? `PayPal Sandbox business account mein ${available} available hain. Report teen ghante tak purani ho sakti hai.${refreshed}`
+            : `The PayPal Sandbox business account has ${available} available. This report may be up to three hours old.${refreshed}`;
+          setIsThinking(false);
+          setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+          speak(reply, { lang });
+        } catch (err) {
+          const reply = (err as Error).message || (lang === 'hi-IN' ? 'PayPal balance nahi mil saka.' : 'Could not read the PayPal balance.');
+          setIsThinking(false);
+          setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+          speak(reply, { lang });
+        }
+        return;
+      }
+
+      let reply = '';
+      if (command === 'help') {
+        reply = lang === 'hi-IN'
+          ? 'Aap bol sakte hain: scanner kholo, activity dikhao, family kholo, settings kholo, ghar jao, balance batao, PayPal balance batao, history sunao, ya kisi contact ko paise bhejo. Sunna rokne ke liye stop listening boliye.'
+          : 'You can say: open scanner, show activity, open family, open settings, go home, check my wallet balance, check my PayPal balance, read my history, or send money to a contact. Say stop listening to pause voice input.';
+      } else if (command === 'open_scanner') {
+        setIsScannerOpen(true);
+        setIsSettingsOpen(false);
+        reply = lang === 'hi-IN'
+          ? 'QR scanner khul gaya. Camera shuru karne ke liye Enable camera button dabayein. Band karne ke liye cancel scanner boliye.'
+          : 'The QR scanner is open. Tap Enable camera and scan to start the camera. Say close scanner to exit.';
+      } else if (command === 'close_scanner') {
+        if (isScannerOpen) {
+          setIsScannerOpen(false);
+          reply = lang === 'hi-IN' ? 'Scanner band kar diya.' : 'Scanner closed.';
+        } else {
+          reply = lang === 'hi-IN' ? 'Scanner abhi khula nahi hai.' : 'The scanner is not open.';
+        }
+      } else if (command === 'open_activity') {
+        setIsScannerOpen(false);
+        setIsSettingsOpen(false);
+        setCurrentRoute({ path: 'activity' });
+        reply = lang === 'hi-IN' ? 'Recent activity khol raha hoon.' : 'Opening recent activity.';
+      } else if (command === 'open_family') {
+        setIsScannerOpen(false);
+        setIsSettingsOpen(false);
+        setCurrentRoute({ path: 'family' });
+        reply = lang === 'hi-IN' ? 'Family dashboard khol raha hoon.' : 'Opening the family dashboard.';
+      } else if (command === 'open_settings') {
+        setIsScannerOpen(false);
+        if (currentRoute.path !== 'wallet') setCurrentRoute({ path: 'wallet' });
+        setIsSettingsOpen(true);
+        reply = lang === 'hi-IN' ? 'Settings khol raha hoon.' : 'Opening settings.';
+      } else if (command === 'close_settings') {
+        setIsSettingsOpen(false);
+        reply = lang === 'hi-IN' ? 'Settings band kar di.' : 'Settings closed.';
+      } else if (command === 'open_merchant') {
+        setIsScannerOpen(false);
+        setIsSettingsOpen(false);
+        setCurrentRoute({ path: 'merchant' });
+        reply = lang === 'hi-IN' ? 'Merchant portal khol raha hoon.' : 'Opening the merchant portal.';
+      } else if (command === 'go_home' || command === 'go_back') {
+        if (isScannerOpen) {
+          setIsScannerOpen(false);
+          reply = lang === 'hi-IN' ? 'Scanner band karke wallet par wapas aa gaya.' : 'Closed the scanner and returned to the wallet.';
+        } else if (isSettingsOpen) {
+          setIsSettingsOpen(false);
+          reply = lang === 'hi-IN' ? 'Settings band karke wallet par wapas aa gaya.' : 'Closed settings and returned to the wallet.';
+        } else if (currentRoute.path !== 'wallet') {
+          setCurrentRoute({ path: 'wallet' });
+          reply = lang === 'hi-IN' ? 'Wallet home khol raha hoon.' : 'Returning to the wallet home screen.';
+        } else {
+          reply = lang === 'hi-IN' ? 'Aap wallet home par hain.' : 'You are already on the wallet home screen.';
+        }
+      }
+
+      setIsThinking(false);
+      setTranscripts((prev) => [...prev, {
+        id: `a-${Date.now()}`,
+        sender: 'assistant',
+        text: reply,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }]);
+      speak(reply, { lang });
+      return;
     }
 
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -230,6 +426,7 @@ export const App: React.FC = () => {
           sessionId: sessionIdRef.current,
           text,
           userId: 'user_meena',
+          lang: lang === 'hi-IN' ? 'hi' : 'en',
         }),
       });
 
@@ -259,6 +456,13 @@ export const App: React.FC = () => {
           pendingAmount?: number;
           scamRisk?: string;
         };
+        actions?: {
+          transactionId?: string;
+          paymentStatus?: string;
+          paypalBatchId?: string;
+          paypalStatus?: string;
+          provider?: string;
+        };
       };
 
       // Detect Blocked payment state
@@ -267,13 +471,18 @@ export const App: React.FC = () => {
       }
 
       // Check if server asks for confirmation
-      if (data.state === 'awaiting_confirmation' && data.context?.pendingPayeeName && data.context?.pendingAmount) {
+      if (data.state === 'awaiting_confirmation') {
+        const payeeName = data.context?.pendingPayeeName || 'Recipient';
+        const amount = data.context?.pendingAmount || 0;
         setPendingConfirmation({
           isOpen: true,
-          payeeName: data.context.pendingPayeeName,
-          amount: data.context.pendingAmount,
+          payeeName,
+          amount,
+          transactionId: data.actions?.transactionId,
           contextSentence: lang === 'hi-IN' ? 'एक सुरक्षित कांटेक्ट को।' : 'To a verified recipient.',
         });
+        const replyLangCode = data.replyLanguage === 'en' ? 'en-IN' : 'hi-IN';
+        speak(data.replyText, { lang: replyLangCode });
         return;
       }
 
@@ -291,7 +500,9 @@ export const App: React.FC = () => {
       setIsThinking(false);
       triggerHaptic('error');
       const fallbackText =
-        lang === 'hi-IN' ? `आपने कहा: "${text}".` : `You said: "${text}".`;
+        lang === 'hi-IN'
+          ? 'Awaaz Pay se jawab nahi mila. Payment dobara karne se pehle Recent Activity check karein, taaki galti se do baar na bhejein. Internet check karke help bol sakte hain.'
+          : 'I could not get a response from Awaaz Pay. Check Recent Activity before retrying a payment so you do not send it twice. Check your connection or say help.';
 
       const assistantEntry: TranscriptEntry = {
         id: `a-${Date.now()}`,
@@ -305,31 +516,88 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSpeechError = (_code: string, friendlyMsg: string) => {
+  const handleSpeechError = (code: string, friendlyMsg: string) => {
     setIsThinking(false);
+    if (code === 'not-allowed' || code === 'service-not-allowed') {
+      setMicPermissionReady(false);
+    }
     triggerHaptic('error');
     speak(friendlyMsg, { lang });
   };
 
-  const { isListening, isSupported: sttSupported, toggleListening, error } =
+  const { isListening, isSupported: sttSupported, toggleListening, startListening, stopListening, error } =
     useSpeechRecognition({
       lang,
       onResult: handleSpeechResult,
       onError: handleSpeechError,
     });
 
+  useEffect(() => {
+    startListeningRef.current = startListening;
+  }, [startListening]);
+
   // Handle start listening haptics
-  const handleMicClick = () => {
-    if (!isListening) {
-      triggerHaptic('listeningStart');
+  const handleMicClick = async () => {
+    setMicPermissionError(null);
+    if (isListening) {
+      toggleListening();
+      return;
     }
+    if (!micPermissionReady) {
+      if (!window.isSecureContext) {
+        const message = lang === 'hi-IN'
+          ? 'Mobile par microphone ke liye secure HTTPS address zaroori hai. App ka https:// link kholein, local IP wala http:// link nahi.'
+          : 'Microphone access on mobile requires a secure HTTPS address. Open the app’s https:// link, not an http:// local network address.';
+        setMicPermissionError(message);
+        speak(message, { lang });
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        const message = lang === 'hi-IN'
+          ? 'Is browser mein microphone access available nahi hai. Chrome ya Safari ka latest version kholein.'
+          : 'Microphone access is unavailable in this browser. Open the latest Chrome or Safari.';
+        setMicPermissionError(message);
+        speak(message, { lang });
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((track) => track.stop());
+        setMicPermissionReady(true);
+        const message = lang === 'hi-IN'
+          ? 'Microphone permission mil gayi. Ab boliye.'
+          : 'Microphone permission granted. Please speak now.';
+        setMicPermissionError(message);
+        speak(message, { lang, onEnd: startListening });
+      } catch (err) {
+        const error = err as Error & { name?: string };
+        const message = error.name === 'NotAllowedError'
+          ? (lang === 'hi-IN'
+            ? 'Microphone permission blocked hai. Browser site settings mein Microphone ko Allow karein; phone Settings mein bhi permission check karein.'
+            : 'Microphone permission is blocked. Allow Microphone in this site’s browser settings, and check your phone settings too.')
+          : error.name === 'NotFoundError'
+            ? (lang === 'hi-IN' ? 'Microphone nahi mila.' : 'No microphone was found on this device.')
+            : (lang === 'hi-IN' ? 'Microphone shuru nahi ho saka. Dobara koshish karein.' : 'Could not start the microphone. Please try again.');
+        setMicPermissionError(message);
+        speak(message, { lang });
+      }
+      return;
+    }
+    triggerHaptic('listeningStart');
     toggleListening();
   };
 
   // Keyboard accessibility: Space or Enter starts and stops listening
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      // Do not intercept keystrokes when focus is inside interactive elements
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLButtonElement ||
+        e.target instanceof HTMLSelectElement ||
+        (e.target as HTMLElement)?.closest('button, a, input, textarea, select')
+      ) {
         return;
       }
       if (e.code === 'Space' || e.code === 'Enter') {
@@ -340,6 +608,14 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isListening]);
+
+  const handleTextSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!textInput.trim()) return;
+    const txt = textInput.trim();
+    setTextInput('');
+    handleSpeechResult(txt);
+  };
 
   // Passkey Login Flow
   const handlePasskeyLogin = async () => {
@@ -443,42 +719,136 @@ export const App: React.FC = () => {
     try {
       setPendingConfirmation((prev) => ({ ...prev, isProcessing: true }));
       triggerHaptic('understood');
+      let outcome: {
+        status?: string;
+        replyText?: string;
+        message?: string;
+        spokenMessage?: string;
+        transactionId?: string;
+        paypalBatchId?: string;
+        batchId?: string;
+        paypalStatus?: string;
+      };
 
-      const res = await fetch('/api/converse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          sessionId: sessionIdRef.current,
-          text: 'Haan',
-          userId: 'user_meena',
-        }),
-      });
+      if (pendingConfirmation.invoiceId) {
+        const res = await fetch('/api/invoices/pay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            invoiceId: pendingConfirmation.invoiceId,
+            userId: 'user_meena',
+            confirm: true,
+          }),
+        });
+        outcome = await res.json();
+        if (!res.ok && outcome.status !== 'need_guardian_approval') {
+          throw new Error(outcome.message || outcome.spokenMessage || 'PayPal payout failed.');
+        }
+        outcome.paypalBatchId = outcome.paypalBatchId || outcome.batchId;
+      } else {
+        const res = await fetch('/api/converse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            sessionId: sessionIdRef.current,
+            text: lang === 'hi-IN' ? 'Haan' : 'Yes',
+            userId: 'user_meena',
+            lang: lang === 'hi-IN' ? 'hi' : 'en',
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Payment request failed (${res.status}).`);
+        outcome = {
+          status: data.actions?.paymentStatus,
+          replyText: data.replyText,
+          transactionId: data.actions?.transactionId,
+          paypalBatchId: data.actions?.paypalBatchId,
+          paypalStatus: data.actions?.paypalStatus,
+        };
+      }
 
-      const data = await res.json();
-      triggerHaptic('confirmed');
-
+      const statusMessage = [
+        outcome.replyText || outcome.message || outcome.spokenMessage || '',
+        outcome.paypalStatus ? `PayPal reports ${outcome.paypalStatus}.` : '',
+      ].filter(Boolean).join(' ');
+      const completed = outcome.status === 'completed';
+      const approvalPending = outcome.status === 'need_guardian_approval';
+      const pending = outcome.status === 'processing' || approvalPending;
       setPendingConfirmation((prev) => ({
         ...prev,
         isProcessing: false,
-        isSuccess: true,
+        isSuccess: completed,
+        isPending: pending,
+        isApprovalPending: approvalPending,
+        isFailed: !completed && !pending,
+        statusMessage,
+        transactionId: outcome.transactionId,
+        paypalBatchId: outcome.paypalBatchId,
       }));
 
-      speak(data.replyText, { lang });
-    } catch {
+      if (completed) triggerHaptic('confirmed');
+      else if (!pending) triggerHaptic('error');
+      const spokenStatus = completed
+        ? `${lang === 'hi-IN' ? 'PayPal Sandbox test payment safal raha. Asli paise nahi bheje gaye.' : 'PayPal Sandbox test payment completed. No real money was moved.'} ${statusMessage}`
+        : pending
+          ? `${lang === 'hi-IN' ? 'PayPal Sandbox payment abhi confirm nahi hua. Dobara payment na karein.' : 'PayPal Sandbox has not confirmed this payment yet. Do not retry it.'} ${statusMessage}`
+          : `${lang === 'hi-IN' ? 'PayPal Sandbox payment fail hua. Aapka reserved paisa wallet mein wapas aa gaya.' : 'The PayPal Sandbox payment failed. Any reserved amount was returned to your wallet.'} ${statusMessage}`;
+      speak(spokenStatus.trim(), { lang });
+    } catch (err) {
       triggerHaptic('error');
       setPendingConfirmation((prev) => ({
         ...prev,
         isProcessing: false,
-        isBlocked: true,
-        blockedReason: 'Payment request failed. Please try again.',
+        isFailed: true,
+        statusMessage: (err as Error).message || (lang === 'hi-IN'
+          ? 'पेमेंट पूरा नहीं हो सका। पैसा वापस जोड़ दिया गया है।'
+          : 'Payment did not complete. Any reserved amount was returned to your wallet.'),
       }));
+      speak((err as Error).message || 'Payment did not complete.', { lang });
     }
   };
 
   const handleScanSuccess = async (qrData: string) => {
     setIsScannerOpen(false);
+    setScanError(null);
     triggerHaptic('understood');
+
+    const recipient = parseScannedRecipient(qrData);
+    if (recipient) {
+      try {
+        const alias = recipient.name;
+        const res = await fetch('/api/contacts/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            alias,
+            displayName: recipient.name,
+            paypalEmail: recipient.email,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not add this recipient');
+        const message = lang === 'hi-IN'
+            ? (data.inCoolingOff
+            ? `QR code mein naam ${recipient.name} aur PayPal email ${recipient.email} likha hai. Yeh jankari abhi PayPal se verify nahi hui hai. Naya payee suraksha ke liye cooling-off mein rakha hai. Is dauran payment ke liye parivaar ki manzoori zaroori hogi. Bhejne se pehle naam aur email us vyakti se verify karein.`
+              : `${recipient.name} pehle se aapke contacts mein hain. QR mein diya PayPal email ${recipient.email} hai. Payment se pehle is email ko us vyakti se verify karein.`)
+          : (data.inCoolingOff
+            ? `This QR says ${recipient.name}, PayPal email ${recipient.email}. PayPal has not verified the name in this QR. I added the recipient in a safety hold; a family member must approve payments during the cooling-off period. Please verify the email with the person before sending.`
+            : `${recipient.name} is already in your contacts. This QR says their PayPal email is ${recipient.email}. Please verify the email with them before sending.`);
+        setTranscripts((prev) => [...prev, {
+          id: `a-${Date.now()}`, sender: 'assistant', text: message,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }]);
+        speak(message, { lang });
+      } catch (err) {
+        const message = (err as Error).message || (lang === 'hi-IN' ? 'Payee add nahi ho saka.' : 'Could not add this payee.');
+        setScanError(message);
+        speak(message, { lang });
+      }
+      return;
+    }
 
     try {
       const res = await fetch('/api/invoices/scan', {
@@ -493,15 +863,98 @@ export const App: React.FC = () => {
           isOpen: true,
           payeeName: inv.merchantName,
           amount: inv.amount,
-          contextSentence: lang === 'hi-IN' ? `${inv.merchantName}, एक वेरिफाइड मर्चेंट।` : `To ${inv.merchantName}, a verified merchant.`,
+          invoiceId: inv.invoiceId,
+          paymentMode: inv.paymentMode,
+          contextSentence: inv.paymentMode === 'awaaz_pay_payout'
+            ? (lang === 'hi-IN'
+              ? 'Awaaz Pay wallet QR. Haan kehne par PayPal Sandbox payout bheja jayega.'
+              : 'Awaaz Pay wallet QR. Confirming sends a PayPal Sandbox test payout.')
+            : (lang === 'hi-IN' ? `${inv.merchantName}, ek verified merchant.` : `To ${inv.merchantName}, a verified merchant.`),
         });
       } else {
-        handleSpeechResult(qrData);
+        const message = lang === 'hi-IN'
+          ? 'Yeh QR code supported PayPal invoice ya recipient code nahi hai. Payee ka Awaaz Pay QR scan karein.'
+          : 'This QR code is not a supported PayPal invoice or recipient code. Ask the payee for an Awaaz Pay recipient QR.';
+        setScanError(message);
+        speak(message, { lang });
       }
     } catch {
-      handleSpeechResult(qrData);
+      const message = lang === 'hi-IN'
+        ? 'QR code verify nahi ho saka. Dobara scan karein.'
+        : 'Could not verify this QR code. Please scan again.';
+      setScanError(message);
+      speak(message, { lang });
     }
   };
+
+  useEffect(() => {
+    if (!pendingConfirmation.isPending || !pendingConfirmation.transactionId) return;
+
+    let stopped = false;
+    let attempts = 0;
+    const pollStatus = async () => {
+      attempts += 1;
+      try {
+        const res = await fetch(`/api/payments/${pendingConfirmation.transactionId}`, {
+          credentials: 'include',
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const tx = data.transaction;
+        if (stopped || !tx) return;
+
+        if (tx.status === 'completed') {
+          setPendingConfirmation((prev) => ({
+            ...prev,
+            isPending: false,
+            isSuccess: true,
+            statusMessage: 'PayPal confirmed this sandbox payout.',
+            paypalBatchId: tx.paypal_ref || prev.paypalBatchId,
+          }));
+          speak(lang === 'hi-IN'
+            ? 'PayPal Sandbox ne payment confirm kar diya. Asli paise nahi bheje gaye.'
+            : 'PayPal Sandbox confirmed the test payment. No real money was moved.', { lang });
+          stopped = true;
+        } else if (tx.status === 'failed') {
+          setPendingConfirmation((prev) => ({
+            ...prev,
+            isPending: false,
+            isFailed: true,
+            statusMessage: 'PayPal did not complete the payout. The reserved wallet amount was returned.',
+          }));
+          speak(lang === 'hi-IN'
+            ? 'PayPal ne payment fail kiya. Rakam wallet mein wapas aa gayi.'
+            : 'PayPal failed the payout. The reserved amount was returned to your wallet.', { lang });
+          stopped = true;
+        } else if (tx.status === 'processing' && data.paypalStatus) {
+          setPendingConfirmation((prev) => ({
+            ...prev,
+            statusMessage: attempts >= 10
+              ? `PayPal reports ${data.paypalStatus}. Still not confirmed. Do not retry; check Recent Activity later.`
+              : `PayPal reports ${data.paypalStatus}. Do not retry this payment.`,
+          }));
+          if (attempts >= 10) stopped = true;
+        } else if (attempts >= 10) {
+          setPendingConfirmation((prev) => ({
+            ...prev,
+            statusMessage: 'PayPal still has not confirmed completion. Do not retry; check Recent Activity later.',
+          }));
+          stopped = true;
+        }
+      } catch {
+        if (attempts >= 10) stopped = true;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      if (!stopped) void pollStatus();
+    }, 3000);
+    void pollStatus();
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [pendingConfirmation.isPending, pendingConfirmation.transactionId, lang, speak]);
 
   // Determine DotRing state
   const ringState: DotRingState = isListening
@@ -552,10 +1005,18 @@ export const App: React.FC = () => {
         blockedReason={pendingConfirmation.blockedReason}
         isProcessing={pendingConfirmation.isProcessing}
         isSuccess={pendingConfirmation.isSuccess}
+        isPending={pendingConfirmation.isPending}
+        isApprovalPending={pendingConfirmation.isApprovalPending}
+        isFailed={pendingConfirmation.isFailed}
+        statusMessage={pendingConfirmation.statusMessage}
+        transactionId={pendingConfirmation.transactionId}
+        paypalBatchId={pendingConfirmation.paypalBatchId}
         onConfirm={handleExecutePayment}
         onCancel={() => setPendingConfirmation({ isOpen: false, payeeName: '', amount: 0 })}
         speak={speak}
         lang={lang}
+        isListening={isListening}
+        onToggleMic={toggleListening}
       />
     );
   }
@@ -690,6 +1151,14 @@ export const App: React.FC = () => {
         </StatusBanner>
       )}
 
+      {typeof window !== 'undefined' && !window.isSecureContext && (
+        <StatusBanner variant="warning" label="Secure connection needed">
+          {lang === 'hi-IN'
+            ? 'Mobile par microphone aur camera ke liye app ka HTTPS link kholein. Local network ka http:// address kaam nahi karega.'
+            : 'Microphone and camera need a secure connection on mobile. Open the app’s HTTPS link; a local network http:// address will not work.'}
+        </StatusBanner>
+      )}
+
       {/* Unauthenticated Security Gate */}
       {authState === 'unauthenticated' && (
         <section
@@ -800,7 +1269,62 @@ export const App: React.FC = () => {
           </DotRing>
         )}
 
-        {error && <StatusBanner variant="danger" label="Error">{error}</StatusBanner>}
+        {(error || scanError || micPermissionError) && (
+          <StatusBanner variant={micPermissionReady && micPermissionError ? 'success' : 'danger'} label={micPermissionReady && micPermissionError ? 'Ready' : 'Error'}>
+            {error || scanError || micPermissionError}
+          </StatusBanner>
+        )}
+
+        {/* Fallback Text Input & Type Option */}
+        <form
+          onSubmit={handleTextSubmit}
+          style={{
+            display: 'flex',
+            gap: '0.5rem',
+            width: '100%',
+            maxWidth: '520px',
+            marginTop: '1rem',
+          }}
+          aria-label="Text message input"
+        >
+          <input
+            type="text"
+            value={textInput}
+            onChange={(e) => setTextInput(e.target.value)}
+            placeholder={
+              lang === 'hi-IN'
+                ? 'या यहाँ टाइप करें (उदा. रमेश को 500 भेजो)'
+                : 'Or type here (e.g. Send 500 to Ramesh)'
+            }
+            aria-label={lang === 'hi-IN' ? 'आदेश यहाँ टाइप करें' : 'Type voice command text'}
+            style={{
+              flex: 1,
+              minHeight: '48px',
+              padding: '0.75rem 1rem',
+              borderRadius: 'var(--radius-pill)',
+              border: '2px solid var(--border)',
+              backgroundColor: 'var(--surface)',
+              color: 'var(--text)',
+              fontSize: '1rem',
+            }}
+          />
+          <button
+            type="submit"
+            style={{
+              minHeight: '48px',
+              padding: '0.75rem 1.25rem',
+              borderRadius: 'var(--radius-pill)',
+              backgroundColor: 'var(--accent)',
+              color: 'var(--accent-text)',
+              border: 'none',
+              fontWeight: 700,
+              fontSize: '1rem',
+              cursor: 'pointer',
+            }}
+          >
+            {lang === 'hi-IN' ? 'भेजें' : 'Send'}
+          </button>
+        </form>
       </section>
 
       {/* Transcript of Conversation in Large Text (aria-live region) */}
@@ -929,6 +1453,32 @@ export const App: React.FC = () => {
                   onClick={() => setLang('en-IN')}
                 >
                   English
+                </BigButton>
+              </div>
+            </div>
+
+            {/* Hands-Free Continuous Voice Toggle */}
+            <div>
+              <strong style={{ fontSize: 'var(--text-body-large)', display: 'block', marginBottom: '0.5rem' }}>
+                {lang === 'hi-IN' ? 'हैंड्स-फ्री वॉइस (ऑटो-माइक):' : 'Hands-Free Voice (Auto-Mic):'}
+              </strong>
+              <BodyText muted style={{ marginBottom: '1rem' }}>
+                {isContinuousVoice
+                  ? 'Active: The mic automatically re-opens after the assistant speaks so blind users can converse hands-free.'
+                  : 'Manual: Tap the mic each time you want to speak.'}
+              </BodyText>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <BigButton
+                  variant={isContinuousVoice ? 'primary' : 'secondary'}
+                  onClick={() => setIsContinuousVoice(true)}
+                >
+                  🟢 Hands-Free ON
+                </BigButton>
+                <BigButton
+                  variant={!isContinuousVoice ? 'primary' : 'secondary'}
+                  onClick={() => setIsContinuousVoice(false)}
+                >
+                  ⚪ Manual Tap
                 </BigButton>
               </div>
             </div>

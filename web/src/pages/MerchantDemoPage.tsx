@@ -5,12 +5,15 @@ interface InvoiceData {
   localId: string;
   merchantName: string;
   merchantEmail: string;
+  settlementEmail: string;
   verified: boolean;
   amount: number;
   currency: string;
   status: string;
-  qrCodeUrl: string;
+  qrCodeUrl: string | null;
   qrCodeImage: string;
+  paymentMode: 'paypal_invoice' | 'awaaz_pay_payout';
+  paypalInvoiceCreated: boolean;
 }
 
 export const MerchantDemoPage: React.FC = () => {
@@ -19,6 +22,10 @@ export const MerchantDemoPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [invoice, setInvoice] = useState<InvoiceData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recipientQr, setRecipientQr] = useState<{ name: string; paypalEmail: string; qrCodeImage: string } | null>(null);
+  const [recipientQrLoading, setRecipientQrLoading] = useState(false);
+  const [recipientName, setRecipientName] = useState('Ravi Cabs');
+  const [recipientEmail, setRecipientEmail] = useState('');
 
   const presets = [150, 250, 500, 750];
 
@@ -77,11 +84,34 @@ export const MerchantDemoPage: React.FC = () => {
     }
   };
 
+  const handleGenerateRecipientQr = async () => {
+    try {
+      setRecipientQrLoading(true);
+      setError(null);
+      const res = await fetch('/api/merchant/recipient-qr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          merchantId: 'merchant_ravi_cabs',
+          name: recipientName,
+          paypalEmail: recipientEmail,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not create recipient QR');
+      setRecipientQr(data);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRecipientQrLoading(false);
+    }
+  };
+
   return (
     <div className="guardian-page-container">
       <header className="guardian-header">
         <h1>🚖 Ravi Cabs · Merchant Portal</h1>
-        <p className="guardian-subtitle">PayPal Invoicing QR Generator for In-Person Spot Rides</p>
+        <p className="guardian-subtitle">Create a fixed fare QR for an in-person ride</p>
       </header>
 
       <div className="guardian-card request-card">
@@ -159,6 +189,32 @@ export const MerchantDemoPage: React.FC = () => {
           </div>
         </section>
 
+        <section className="form-section" aria-labelledby="recipient-qr-heading">
+          <h2 id="recipient-qr-heading">New recipient QR · no amount</h2>
+          <p>Share this code to let Awaaz Pay read the recipient name and PayPal email. The name is not verified by PayPal; scanned recipients go through the safety hold.</p>
+          <label htmlFor="recipient-qr-name">Recipient name</label>
+          <input id="recipient-qr-name" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} className="form-input" />
+          <label htmlFor="recipient-qr-email">Recipient PayPal Sandbox email</label>
+          <input id="recipient-qr-email" type="email" value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} className="form-input" placeholder="Blank uses the demo recipient account" />
+          <button
+            type="button"
+            className="auth-secondary-btn"
+            onClick={handleGenerateRecipientQr}
+            disabled={recipientQrLoading}
+            style={{ minHeight: '64px' }}
+          >
+            {recipientQrLoading ? 'Creating recipient QR…' : 'Create recipient QR'}
+          </button>
+          {recipientQr && (
+            <div style={{ display: 'grid', justifyItems: 'center', gap: '0.5rem', padding: '1rem', marginTop: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
+              <img src={recipientQr.qrCodeImage} alt={`Awaaz Pay recipient QR for ${recipientQr.name}; it contains an unverified name and PayPal email`} style={{ width: '240px', height: '240px', background: '#fff' }} />
+              <strong>{recipientQr.name}</strong>
+              <span>{recipientQr.paypalEmail}</span>
+              <span>Recipient details only. No payment amount is encoded.</span>
+            </div>
+          )}
+        </section>
+
         {error && <p className="error-banner">⚠️ {error}</p>}
 
         {/* QR Code Display Container */}
@@ -190,7 +246,7 @@ export const MerchantDemoPage: React.FC = () => {
                 ₹{invoice.amount.toLocaleString('en-IN')}
               </div>
               <div style={{ fontSize: '0.9rem', color: '#475569', fontWeight: 600 }}>
-                {invoice.merchantName} · PayPal Invoice QR
+                {invoice.merchantName} · {invoice.paymentMode === 'paypal_invoice' ? 'PayPal invoice QR' : 'Awaaz Pay wallet QR'}
               </div>
               <div style={{ fontSize: '0.75rem', color: '#64748b', fontFamily: 'monospace', marginTop: '0.25rem' }}>
                 {invoice.invoiceId}
@@ -205,11 +261,19 @@ export const MerchantDemoPage: React.FC = () => {
             <span className="detail-value">Ravi Cabs</span>
           </div>
           <div className="detail-row">
-            <span className="detail-label">PayPal Sandbox:</span>
+            <span className="detail-label">Merchant PayPal account:</span>
             <span className="detail-value" style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
-              ravi-cabs-sandbox@example.com
+              {invoice?.merchantEmail || '—'}
             </span>
           </div>
+          {invoice && invoice.paymentMode === 'awaaz_pay_payout' && (
+            <div className="detail-row">
+              <span className="detail-label">Settlement:</span>
+              <span className="detail-value">
+                Awaaz Pay sends a PayPal sandbox payout to {invoice.settlementEmail} after the customer confirms in the wallet.
+              </span>
+            </div>
+          )}
           <div className="detail-row">
             <span className="detail-label">Trust Tier:</span>
             <span className="detail-value">Tier 2 (Verified Merchant QR Spot Payment)</span>

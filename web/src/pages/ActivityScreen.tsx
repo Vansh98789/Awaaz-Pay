@@ -5,6 +5,7 @@ import {
   Headline,
   BodyText,
   BigButton,
+  StatusBanner,
 } from '../design/index.js';
 
 interface ActivityItem {
@@ -13,6 +14,10 @@ interface ActivityItem {
   direction: 'IN' | 'OUT';
   amount: number;
   time: string;
+  status: string;
+  source: string;
+  reference?: string;
+  paypalStatus?: string;
 }
 
 interface ActivityScreenProps {
@@ -29,6 +34,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
   const [filter, setFilter] = useState<'all' | 'in' | 'out'>('all');
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     async function loadActivity() {
@@ -37,8 +43,11 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
         const res = await fetch('/api/family/dashboard');
         if (res.ok) {
           const data = await res.json();
-          const mapped: ActivityItem[] = (data.activities || []).map((a: any) => {
+          const mapped: ActivityItem[] = (data.transactions || []).map((a: any) => {
             const isReceived = a.direction === 'IN';
+            const status = String(a.status || 'unknown').replace(/_/g, ' ');
+            const isSyntheticRef = String(a.paypalRef || '').startsWith('sandbox-payout-')
+              || String(a.paypalRef || '').startsWith('batch-');
             const sentence = isReceived
               ? lang === 'hi-IN'
                 ? `${a.counterparty} se ${a.amount} rupaye mile, ${a.time}.`
@@ -53,48 +62,23 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
               direction: a.direction,
               amount: a.amount,
               time: a.time,
+              status,
+              source: isSyntheticRef
+                ? 'Awaaz Pay simulated fallback · no PayPal transfer'
+                : a.paypalRef ? 'PayPal Sandbox test record' : 'Awaaz Pay wallet ledger',
+              reference: a.paypalRef || undefined,
+              paypalStatus: a.paypalStatus,
             };
           });
           setItems(mapped);
+          setLoadError(false);
         } else {
-          // Fallback to sample data if server unreachable
-          setItems([
-            {
-              id: '1',
-              sentence:
-                lang === 'hi-IN'
-                  ? 'Bhaiya ko 300 rupaye bheje, aaj.'
-                  : 'Sent 300 rupees to Bhaiya, today.',
-              direction: 'OUT',
-              amount: 300,
-              time: 'Today',
-            },
-            {
-              id: '2',
-              sentence:
-                lang === 'hi-IN'
-                  ? 'Ramesh se 2500 rupaye mile, 4 din pehle.'
-                  : 'Received 2500 rupees from Ramesh, 4 days ago.',
-              direction: 'IN',
-              amount: 2500,
-              time: '4 days ago',
-            },
-          ]);
+          setItems([]);
+          setLoadError(true);
         }
       } catch {
-        // Fallback
-        setItems([
-          {
-            id: '1',
-            sentence:
-              lang === 'hi-IN'
-                ? 'Bhaiya ko 300 rupaye bheje, aaj.'
-                : 'Sent 300 rupees to Bhaiya, today.',
-            direction: 'OUT',
-            amount: 300,
-            time: 'Today',
-          },
-        ]);
+        setItems([]);
+        setLoadError(true);
       } finally {
         setLoading(false);
       }
@@ -109,6 +93,12 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
   });
 
   const handleReadSummary = () => {
+    if (loadError) {
+      speak(lang === 'hi-IN'
+        ? 'Asli transaction list load nahi hui. Koi demo hisab nahi padhkar sunaya ja raha.'
+        : 'The live transaction list did not load. No sample activity will be read as real.');
+      return;
+    }
     if (filteredItems.length === 0) {
       const msg =
         lang === 'hi-IN'
@@ -141,6 +131,18 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
         </div>
       }
     >
+      <StatusBanner variant="warning" label="Sandbox test mode">
+        {lang === 'hi-IN'
+          ? 'Yeh PayPal ke test records hain. Is app se asli paise nahi bheje jaate.'
+          : 'These are PayPal sandbox test records. This app does not move real money.'}
+      </StatusBanner>
+      {loadError && (
+        <StatusBanner variant="danger" label={lang === 'hi-IN' ? 'Hisab load nahi hua' : 'Live activity unavailable'}>
+          {lang === 'hi-IN'
+            ? 'Server se asli transaction list nahi mili. Koi demo transaction nahi dikhaya ja raha.'
+            : 'The server activity list could not be loaded. No sample transactions are being shown.'}
+        </StatusBanner>
+      )}
       {/* 3 Large Filter Buttons */}
       <div
         role="group"
@@ -212,6 +214,10 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
         <BodyText size="large" muted>
           {lang === 'hi-IN' ? 'Hisab load ho raha hai...' : 'Loading recent activity...'}
         </BodyText>
+      ) : loadError ? (
+        <BodyText size="large" muted>
+          {lang === 'hi-IN' ? 'Dobara koshish karne ke liye home par jaakar hisab kholiye.' : 'Return to Home and reopen activity to try again.'}
+        </BodyText>
       ) : filteredItems.length === 0 ? (
         <BodyText size="large" muted>
           {lang === 'hi-IN' ? 'Is category mein koi len-den nahi hai.' : 'No items in this category.'}
@@ -242,7 +248,12 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
                 gap: '1rem',
               }}
             >
-              <BodyText size="large">{item.sentence}</BodyText>
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                <BodyText size="large">{item.sentence}</BodyText>
+                <BodyText muted>{item.status} · {item.source}</BodyText>
+                {item.paypalStatus && <BodyText muted>PayPal reports: {item.paypalStatus}</BodyText>}
+                {item.reference && <BodyText muted>ID {item.reference}</BodyText>}
+              </div>
               <span
                 style={{
                   fontWeight: 700,

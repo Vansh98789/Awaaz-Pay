@@ -22,7 +22,7 @@ export interface ConversationTemplates {
 export const templates: Record<'hi' | 'en', ConversationTemplates> = {
   hi: {
     welcome: 'Namaste Meena ji. Boliye, main sun rahi hoon.',
-    clarify_amount: 'Kitna paisa bhejna hai? Kripya amount bolein.',
+    clarify_amount: 'Kitne rupaye bhejne hain? Kripya rakam rupaye mein boliye.',
     clarify_recipient: 'Kisko paisa bhejna hai? Kripya naam bolein.',
     ask_confirmation: (name: string, amount: number) =>
       `${name} ko ${amount} rupaye bhejne hain. Kya main bhej doon? Haan ya nahi bolein.`,
@@ -44,7 +44,7 @@ export const templates: Record<'hi' | 'en', ConversationTemplates> = {
     unclear_cancel: 'Do baar samajh nahi aaya. Suraksha ke liye payment cancel kar diya gaya hai.',
     check_balance: (balance: number) =>
       `Aapke wallet mein ${balance.toLocaleString('en-IN')} rupaye hain.`,
-    unknown_intent: 'Samajh nahi aaya. Kripya dobara bolein.',
+    unknown_intent: 'Samajh nahi aaya. Madad ke liye help boliye. Aap scanner khol sakte hain, activity dekh sakte hain, balance pooch sakte hain, ya kisi contact ko paise bhej sakte hain.',
     no_prior_reply: 'Dohraane ke liye koi pichla jawab nahi hai.',
     scam_ask_told_to_pay: 'Kya kisi ne phone ya message par aapko ye payment karne ko kaha hai?',
     scam_ask_knows_payee: 'Kya aap is insaan ko jaante hain?',
@@ -53,7 +53,7 @@ export const templates: Record<'hi' | 'en', ConversationTemplates> = {
   },
   en: {
     welcome: 'Hello Meena. I am listening. How can I help you?',
-    clarify_amount: 'How much money would you like to send? Please say the amount.',
+    clarify_amount: 'How many rupees would you like to send? Please say the amount in rupees.',
     clarify_recipient: 'Who would you like to send money to? Please say the name.',
     ask_confirmation: (name: string, amount: number) =>
       `Send ₹${amount} to ${name}? Say yes to confirm or no to cancel.`,
@@ -75,7 +75,7 @@ export const templates: Record<'hi' | 'en', ConversationTemplates> = {
     unclear_cancel: 'I could not hear confirmation. For safety, the payment was cancelled.',
     check_balance: (balance: number) =>
       `Your wallet balance is ₹${balance.toLocaleString('en-IN')}.`,
-    unknown_intent: 'Sorry, I did not catch that. Please say it again.',
+    unknown_intent: 'I did not understand. Say help for options. You can open the scanner, show activity, check a balance, or send money to a contact.',
     no_prior_reply: 'There is no previous reply to repeat.',
     scam_ask_told_to_pay: 'Did someone ask you over a phone call or message to make this payment?',
     scam_ask_knows_payee: 'Do you know this person?',

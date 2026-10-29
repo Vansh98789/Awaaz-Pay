@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { parseIntent } from '../intent/parseIntent.js';
+import { regexFallback } from '../intent/fallback.js';
 import {
   listContacts,
   getBalance,
@@ -34,6 +35,12 @@ export interface ConverseResponse {
   replyText: string;
   replyLanguage: 'hi' | 'en';
   state: ConversationState;
+  context?: {
+    pendingPayeeName?: string;
+    pendingAmount?: number;
+    isNewPayee?: boolean;
+    scamRisk?: string;
+  };
   actions?: Record<string, unknown>;
 }
 
@@ -41,13 +48,14 @@ export async function processConversation(
   db: Database.Database,
   sessionId: string,
   text: string,
-  userId = 'user_meena'
+  userId = 'user_meena',
+  requestedLang?: 'hi' | 'en'
 ): Promise<ConverseResponse> {
   const session = getSession(sessionId, userId);
   const user = getUserById(db, userId);
 
   const lang: 'hi' | 'en' =
-    session.lang || (user?.language === 'en' ? 'en' : 'hi');
+    requestedLang || session.lang || (user?.language === 'en' ? 'en' : 'hi');
 
   const contactsList = listContacts(db, userId);
   const merchantsList = (
@@ -60,6 +68,7 @@ export async function processConversation(
   ];
 
   let replyText = '';
+  let paymentResult: { status: string; transactionId: string; batchId?: string; paypalStatus?: string } | undefined;
 
   if (session.state === 'awaiting_confirmation') {
     const intentResult = await parseIntent(
@@ -80,6 +89,12 @@ export async function processConversation(
         transactionId: session.currentTransactionId!,
         userConfirmed: true,
       });
+      paymentResult = {
+        status: confirmRes.status,
+        transactionId: confirmRes.transactionId,
+        batchId: confirmRes.batchId,
+        paypalStatus: confirmRes.paypalStatus,
+      };
 
       if (confirmRes.status === 'completed') {
         if (session.invoiceId) {
@@ -90,6 +105,10 @@ export async function processConversation(
           session.pendingAmount || 0,
           confirmRes.newBalance
         );
+      } else if (confirmRes.status === 'processing') {
+        replyText = confirmRes.spoken_message || (lang === 'hi'
+          ? 'PayPal abhi payment process kar raha hai. Thodi der baad status dekhein.'
+          : 'PayPal is still processing this payment. Check the status again shortly.');
       } else if (confirmRes.error?.includes('Insufficient balance')) {
         replyText = templates[lang].insufficient_funds(
           confirmRes.balance || 0,
@@ -151,6 +170,12 @@ export async function processConversation(
           transactionId: session.currentTransactionId!,
           userConfirmed: true,
         });
+        paymentResult = {
+          status: confirmRes.status,
+          transactionId: confirmRes.transactionId,
+          batchId: confirmRes.batchId,
+          paypalStatus: confirmRes.paypalStatus,
+        };
 
         if (confirmRes.status === 'completed') {
           replyText = templates[lang].payment_success(
@@ -158,6 +183,10 @@ export async function processConversation(
             session.pendingAmount || 0,
             confirmRes.newBalance
           );
+        } else if (confirmRes.status === 'processing') {
+          replyText = confirmRes.spoken_message || (lang === 'hi'
+            ? 'PayPal abhi payment process kar raha hai. Thodi der baad status dekhein.'
+            : 'PayPal is still processing this payment. Check the status again shortly.');
         } else if (confirmRes.error?.includes('Insufficient balance')) {
           replyText = templates[lang].insufficient_funds(
             confirmRes.balance || 0,
@@ -515,7 +544,18 @@ export async function processConversation(
         replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
       }
     } else {
-      const intentResult = await parseIntent(text, contactAliases, 'idle');
+      const parsedIntent = await parseIntent(text, contactAliases, 'idle');
+      const isCompletingPayment = session.state === 'awaiting_payment_details';
+      const continuationIntent = isCompletingPayment && parsedIntent.intent === 'unknown'
+        ? regexFallback(text, contactAliases, 'idle')
+        : parsedIntent;
+      const intentResult = isCompletingPayment && continuationIntent.intent === 'send_money'
+        ? {
+            ...continuationIntent,
+            recipient_alias: continuationIntent.recipient_alias ?? session.pendingPayeeRaw ?? null,
+            amount: continuationIntent.amount ?? session.pendingAmount ?? null,
+          }
+        : continuationIntent;
 
     // Check specific contact funding follow-up question (e.g. "Ramesh ne last time kitna bheja?")
     const hindiSenderMatch = text.match(/([a-zA-Z\u0900-\u097F]+)\s+ne\s+(?:last\s*time|aakhri\s*baar|kitna)?\s*(?:kitna)?\s*bheja/i);
@@ -549,7 +589,7 @@ export async function processConversation(
       replyText = session.lastReply
         ? session.lastReply.text
         : templates[lang].no_prior_reply;
-    } else if (intentResult.intent === 'cancel') {
+    } else if (intentResult.intent === 'cancel' || (isCompletingPayment && intentResult.intent === 'confirm_no')) {
       replyText = templates[lang].payment_cancelled;
       resetSession(sessionId);
     } else if (intentResult.intent === 'check_balance') {
@@ -566,9 +606,32 @@ export async function processConversation(
       const exp = explainRecentPayment(db, userId);
       replyText = exp.spokenText[lang];
     } else if (intentResult.intent === 'send_money') {
-      if (!intentResult.amount) {
+      const requestedDollars = /\$\s*\d|\b(?:usd|us dollars?|dollars?)\b/i.test(text);
+      if (requestedDollars) {
+        updateSession(sessionId, {
+          state: 'awaiting_payment_details',
+          pendingPayeeRaw: intentResult.recipient_alias ?? session.pendingPayeeRaw,
+          pendingPayeeName: intentResult.recipient_alias ?? session.pendingPayeeName,
+          pendingAmount: intentResult.amount ?? session.pendingAmount,
+          unclearAttempts: 0,
+        });
+        replyText = lang === 'hi'
+          ? 'Yeh wallet sirf rupaye bhej sakta hai. Kripya rakam rupaye mein boliye.'
+          : 'This wallet sends rupees only. Please say the amount in rupees.';
+      } else if (!intentResult.amount) {
+        updateSession(sessionId, {
+          state: 'awaiting_payment_details',
+          pendingPayeeRaw: intentResult.recipient_alias ?? session.pendingPayeeRaw,
+          pendingPayeeName: intentResult.recipient_alias ?? session.pendingPayeeName,
+          unclearAttempts: 0,
+        });
         replyText = templates[lang].clarify_amount;
       } else if (!intentResult.recipient_alias) {
+        updateSession(sessionId, {
+          state: 'awaiting_payment_details',
+          pendingAmount: intentResult.amount,
+          unclearAttempts: 0,
+        });
         replyText = templates[lang].clarify_recipient;
       } else {
         try {
@@ -692,8 +755,21 @@ export async function processConversation(
     replyText,
     replyLanguage: lang,
     state: currentSession.state,
-    actions: currentSession.currentTransactionId
-      ? { transactionId: currentSession.currentTransactionId }
-      : undefined,
+    context: {
+      pendingPayeeName: currentSession.pendingPayeeName,
+      pendingAmount: currentSession.pendingAmount,
+      isNewPayee: currentSession.isNewPayee,
+    },
+    actions: paymentResult
+      ? {
+          transactionId: paymentResult.transactionId,
+          paymentStatus: paymentResult.status,
+          paypalBatchId: paymentResult.batchId,
+          paypalStatus: paymentResult.paypalStatus,
+          provider: 'paypal_sandbox',
+        }
+      : currentSession.currentTransactionId
+        ? { transactionId: currentSession.currentTransactionId }
+        : undefined,
   };
 }

@@ -1,6 +1,7 @@
 export type ConversationState =
   | 'idle'
   | 'awaiting_confirmation'
+  | 'awaiting_payment_details'
   | 'awaiting_guardian_approval'
   | 'awaiting_scam_answers'
   | 'done';

@@ -1,4 +1,4 @@
-const TIMEOUT_MS = 8000;
+const TIMEOUT_MS = 15000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -9,13 +9,25 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+function cleanModelName(model: string): string {
+  let clean = model.trim().replace(/^['"]|['"]$/g, '');
+  if (clean.includes('=')) {
+    clean = clean.split('=').pop()!.trim();
+  }
+  if (clean.startsWith('models/')) {
+    clean = clean.replace(/^models\//, '');
+  }
+  return clean;
+}
+
 export async function callGemini(
   apiKey: string,
   model: string,
   systemPrompt: string,
   userText: string,
 ): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const sanitizedModel = cleanModelName(model);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${sanitizedModel}:generateContent?key=${apiKey}`;
 
   const body = {
     system_instruction: { parts: [{ text: systemPrompt }] },

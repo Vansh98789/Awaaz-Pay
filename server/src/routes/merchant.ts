@@ -23,6 +23,43 @@ import { preparePayment, confirmPayment } from '../payments/pipeline.js';
 export function createMerchantRouter(db: Database.Database): Router {
   const router = Router();
 
+  // Create a shareable Awaaz Pay recipient QR with no amount attached.
+  router.post('/recipient-qr', async (req: Request, res: Response) => {
+    try {
+      const merchantId = typeof req.body.merchantId === 'string' ? req.body.merchantId : 'merchant_ravi_cabs';
+      const merchant = getMerchantById(db, merchantId);
+      if (!merchant) {
+        res.status(404).json({ error: 'Recipient not found' });
+        return;
+      }
+      const paypalEmail = merchant.id === 'merchant_ravi_cabs'
+        ? process.env.PAYPAL_SANDBOX_MERCHANT_RECIPIENT_EMAIL
+          || process.env.PAYPAL_SANDBOX_RECEIVER_EMAIL
+          || merchant.paypal_email
+        : merchant.paypal_email;
+      const name = typeof req.body.name === 'string' ? req.body.name.trim() : merchant.name;
+      const requestedEmail = typeof req.body.paypalEmail === 'string' ? req.body.paypalEmail.trim() : '';
+      const recipientEmail = requestedEmail || paypalEmail;
+      if (!name || name.length > 80 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+        res.status(400).json({ error: 'Enter a recipient name and valid PayPal email' });
+        return;
+      }
+      const payload = JSON.stringify({
+        type: 'awaaz-pay-recipient',
+        name,
+        paypalEmail: recipientEmail,
+      });
+      const qrCodeImage = await QRCode.toDataURL(payload, {
+        width: 320,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+      res.status(200).json({ success: true, name, paypalEmail: recipientEmail, qrCodeImage });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // 1. Create invoice for demo merchant (e.g. Ravi Cabs)
   router.post('/invoice', async (req: Request, res: Response) => {
     try {
@@ -39,15 +76,27 @@ export function createMerchantRouter(db: Database.Database): Router {
         return;
       }
 
-      let paypalInvoiceId: string = `INV2-DEMO-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      // Demo seed merchants use placeholder addresses; bind Ravi Cabs to the configured sandbox merchant.
+      const merchantEmail = merchant.id === 'merchant_ravi_cabs'
+        ? process.env['PAYPAL_SANDBOX_MERCHANT_EMAIL'] || merchant.paypal_email
+        : merchant.paypal_email;
+      const settlementEmail = merchant.id === 'merchant_ravi_cabs'
+        ? process.env['PAYPAL_SANDBOX_MERCHANT_RECIPIENT_EMAIL']
+          || process.env['PAYPAL_SANDBOX_RECEIVER_EMAIL']
+          || merchant.paypal_email
+        : merchant.paypal_email;
+
+      let paypalInvoiceId = `AWZ-INV-${crypto.randomUUID()}`;
+      let paypalInvoiceCreated = false;
+      let paypalInvoiceSent = false;
       let qrCodeBase64: string | null = null;
       let qrCodeDataUrl: string = '';
 
       // Attempt live PayPal sandbox call
       try {
         const ppInv = await createInvoice({
-          merchant_email: merchant.paypal_email,
-          recipient_email: 'payer-sandbox@example.com',
+          merchant_email: merchantEmail,
+          recipient_email: process.env['PAYPAL_SANDBOX_RECEIVER_EMAIL'] || 'payer-sandbox@example.com',
           amount: Number(amount),
           currency,
           note,
@@ -55,23 +104,31 @@ export function createMerchantRouter(db: Database.Database): Router {
 
         if (ppInv?.id) {
           paypalInvoiceId = ppInv.id;
-          // Send invoice without emailing recipient
-          await sendInvoice(paypalInvoiceId, false).catch(() => {});
-          // Generate QR code from PayPal
-          qrCodeBase64 = await generateInvoiceQrCode(paypalInvoiceId, 320).catch(() => null);
+          paypalInvoiceCreated = true;
+          try {
+            await sendInvoice(paypalInvoiceId, false);
+            paypalInvoiceSent = true;
+            qrCodeBase64 = await generateInvoiceQrCode(paypalInvoiceId, 320).catch(() => null);
+          } catch (sendError) {
+            console.warn(`[merchant] PayPal invoice send failed: ${(sendError as Error).message}`);
+          }
         }
       } catch (err) {
-        // Fallback to simulated invoice if sandbox is not reachable in demo/test mode
-        console.warn(`[merchant] PayPal invoice creation fallback: ${(err as Error).message}`);
+        // A local registry QR keeps the demo usable when PayPal Invoicing is not enabled.
+        console.warn(`[merchant] Using wallet QR because PayPal invoice creation failed: ${(err as Error).message}`);
       }
 
-      const invoiceUrl = `https://www.sandbox.paypal.com/invoice/p/#${paypalInvoiceId}`;
+      const invoiceUrl = paypalInvoiceSent && qrCodeBase64
+        ? `https://www.sandbox.paypal.com/invoice/p/#${paypalInvoiceId}`
+        : null;
 
       // If PayPal QR code is unavailable, generate a valid scannable QR data URL locally
       if (qrCodeBase64) {
         qrCodeDataUrl = `data:image/png;base64,${qrCodeBase64}`;
       } else {
-        qrCodeDataUrl = await QRCode.toDataURL(invoiceUrl, {
+        // Local registry QR payload is scanned by Awaaz Pay and settled by Payouts.
+        const qrPayload = JSON.stringify({ type: 'awaaz_pay_invoice', invoiceId: paypalInvoiceId });
+        qrCodeDataUrl = await QRCode.toDataURL(qrPayload, {
           width: 320,
           margin: 2,
           color: { dark: '#000000', light: '#ffffff' },
@@ -84,7 +141,7 @@ export function createMerchantRouter(db: Database.Database): Router {
         paypal_invoice_id: paypalInvoiceId,
         amount: Number(amount),
         currency,
-        status: 'SENT',
+        status: paypalInvoiceSent ? 'SENT' : 'OPEN',
       });
 
       const defaultUser = getUserById(db, 'user_meena');
@@ -109,11 +166,14 @@ export function createMerchantRouter(db: Database.Database): Router {
         localId: invoice.id,
         merchantId: merchant.id,
         merchantName: merchant.name,
-        merchantEmail: merchant.paypal_email,
+        merchantEmail,
+        settlementEmail,
         verified: !!merchant.verified,
         amount: Number(amount),
         currency,
         status: invoice.status,
+        paymentMode: invoiceUrl ? 'paypal_invoice' : 'awaaz_pay_payout',
+        paypalInvoiceCreated,
         qrCodeUrl: invoiceUrl,
         qrCodeImage: qrCodeDataUrl,
       });
@@ -145,6 +205,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       res.status(200).json({
         success: true,
         invoiceId: invoice.paypal_invoice_id,
+        paymentMode: invoice.paypal_invoice_id.startsWith('AWZ-INV-') ? 'awaaz_pay_payout' : 'paypal_invoice',
         localId: invoice.id,
         merchantId: invoice.merchant_id,
         merchantName: invoice.merchant_name,
@@ -194,6 +255,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       res.status(200).json({
         success: true,
         invoiceId: invoice.paypal_invoice_id,
+        paymentMode: invoice.paypal_invoice_id.startsWith('AWZ-INV-') ? 'awaaz_pay_payout' : 'paypal_invoice',
         localId: invoice.id,
         merchantId: invoice.merchant_id,
         merchantName: invoice.merchant_name,
@@ -278,11 +340,13 @@ export function createMerchantRouter(db: Database.Database): Router {
           updateInvoiceStatus(db, invoice.paypal_invoice_id, 'PAID');
 
           // Record payment on PayPal if possible
-          await recordInvoicePayment(
-            invoice.paypal_invoice_id,
-            invoice.amount,
-            invoice.currency
-          ).catch(() => {});
+          if (!invoice.paypal_invoice_id.startsWith('AWZ-INV-')) {
+            await recordInvoicePayment(
+              invoice.paypal_invoice_id,
+              invoice.amount,
+              invoice.currency
+            ).catch(() => {});
+          }
 
           res.status(200).json({
             success: true,
@@ -290,6 +354,20 @@ export function createMerchantRouter(db: Database.Database): Router {
             transactionId: prep.transactionId,
             newBalance: result.newBalance,
             spokenMessage: result.spoken_message,
+            paymentProvider: 'paypal_sandbox',
+            paypalBatchId: result.batchId,
+          });
+          return;
+        }
+
+        if (result.status === 'processing') {
+          res.status(202).json({
+            success: true,
+            status: 'processing',
+            transactionId: result.transactionId,
+            batchId: result.batchId,
+            message: result.spoken_message,
+            paymentProvider: 'paypal_sandbox',
           });
           return;
         }

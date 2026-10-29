@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import type Database from 'better-sqlite3';
-import { createOrder, captureOrder } from '../paypal/index.js';
+import { createOrder, captureOrder, getPayPalBalances, PayPalError } from '../paypal/index.js';
 import {
   addLedgerEntry,
   getBalance,
@@ -10,12 +10,39 @@ import {
   hasLedgerRef,
 } from '../db/repository.js';
 import { formatFundingNotificationHindi } from '../notifications/templates.js';
+import { refreshPayoutStatus } from '../payments/pipeline.js';
 
 export function createFamilyRouter(db: Database.Database): Router {
   const router = Router();
 
+  // PayPal's reporting balance is separate from the Awaaz Pay INR demo ledger.
+  router.get('/paypal-balance', async (_req: Request, res: Response) => {
+    try {
+      const result = await getPayPalBalances('USD');
+      const usd = result.balances.find((balance) => balance.currency === 'USD');
+      res.status(200).json({
+        success: true,
+        currency: 'USD',
+        total: usd?.total_balance.value ?? '0.00',
+        available: usd?.available_balance.value ?? '0.00',
+        asOf: result.as_of_time ?? result.last_refresh_time ?? null,
+        source: 'paypal_sandbox',
+        note: 'PayPal reporting balances may take up to three hours to refresh.',
+      });
+    } catch (err) {
+      const paypalDenied = err instanceof PayPalError && err.status === 403;
+      res.status(502).json({
+        success: false,
+        error: paypalDenied
+          ? 'PayPal denied balance access. Enable the List Balances or Transaction Search reporting permission for this Sandbox REST app, then restart Awaaz Pay.'
+          : (err as Error).message,
+        code: 'PAYPAL_BALANCE_UNAVAILABLE',
+      });
+    }
+  });
+
   // Dashboard endpoint for AG Grid Family Dashboard
-  router.get('/dashboard', (req: Request, res: Response) => {
+  router.get('/dashboard', async (req: Request, res: Response) => {
     try {
       const { userId = 'user_meena' } = req.query;
       const uid = String(userId);
@@ -24,6 +51,17 @@ export function createFamilyRouter(db: Database.Database): Router {
         res.status(404).json({ error: 'User not found' });
         return;
       }
+
+      const processingTransactions = db
+        .prepare<[string], { id: string }>(
+          "SELECT id FROM transactions WHERE user_id = ? AND status = 'processing' AND paypal_ref IS NOT NULL"
+        )
+        .all(uid);
+      const paypalStatusByTransaction = new Map<string, string>();
+      await Promise.all(processingTransactions.map(async (tx) => {
+        const refreshed = await refreshPayoutStatus(db, tx.id);
+        if (refreshed.paypalStatus) paypalStatusByTransaction.set(tx.id, refreshed.paypalStatus);
+      }));
 
       const balance = getBalance(db, uid);
 
@@ -88,6 +126,7 @@ export function createFamilyRouter(db: Database.Database): Router {
           decision: tx.decision,
           status: tx.status,
           paypalRef: tx.paypal_ref,
+          paypalStatus: paypalStatusByTransaction.get(tx.id),
           isFlagged,
         };
       });

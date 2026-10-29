@@ -56,6 +56,8 @@ const customGridTheme = themeQuartz.withParams({
 export const FamilyDashboardPage: React.FC = () => {
   const [userName, setUserName] = useState<string>('Meena');
   const [balance, setBalance] = useState<number>(0);
+  const [paypalBalance, setPaypalBalance] = useState<{ available: string; total: string; asOf: string | null } | null>(null);
+  const [paypalBalanceError, setPaypalBalanceError] = useState<string | null>(null);
   const [limits, setLimits] = useState<LimitsData>({
     daily_total: 1000,
     per_transaction_new_payee: 500,
@@ -70,7 +72,21 @@ export const FamilyDashboardPage: React.FC = () => {
 
   useEffect(() => {
     fetchDashboardData();
+    fetchPayPalBalance();
   }, []);
+
+  const fetchPayPalBalance = async () => {
+    try {
+      setPaypalBalanceError(null);
+      const res = await fetch('/api/family/paypal-balance');
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'PayPal balance is unavailable');
+      setPaypalBalance({ available: data.available, total: data.total, asOf: data.asOf });
+    } catch (err) {
+      setPaypalBalance(null);
+      setPaypalBalanceError((err as Error).message);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -297,7 +313,34 @@ export const FamilyDashboardPage: React.FC = () => {
           <h3 style={{ fontSize: '1.35rem', color: '#34d399', marginTop: '0.25rem' }}>
             ₹{balance.toLocaleString('en-IN')}
           </h3>
-          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Available in ledger</span>
+          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+            Awaaz Pay ledger, not the PayPal account balance. Sandbox only; no real money.
+          </span>
+        </div>
+
+        <div className="guardian-card" style={{ padding: '1rem' }} aria-live="polite">
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>PayPal Sandbox Balance · USD</span>
+          {paypalBalance ? (
+            <>
+              <h3 style={{ fontSize: '1.35rem', color: '#34d399', marginTop: '0.25rem' }}>
+                ${Number(paypalBalance.available).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} available
+              </h3>
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                Total: ${Number(paypalBalance.total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {paypalBalance.asOf ? ` · PayPal report as of ${new Date(paypalBalance.asOf).toLocaleString()}` : ''}
+              </span>
+            </>
+          ) : (
+            <>
+              <h3 style={{ fontSize: '1rem', marginTop: '0.25rem' }}>Unavailable</h3>
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                {paypalBalanceError || 'Loading PayPal balance…'} PayPal reporting can lag by up to 3 hours.
+              </span>
+              <button type="button" onClick={fetchPayPalBalance} className="auth-secondary-btn" style={{ marginTop: '0.5rem', minHeight: '44px' }}>
+                Refresh PayPal balance
+              </button>
+            </>
+          )}
         </div>
 
         <div className="guardian-card" style={{ padding: '1rem' }}>

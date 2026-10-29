@@ -10,14 +10,14 @@ export function createConverseRouter(db: Database.Database): Router {
   router.post('/converse', requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.user?.id || req.body?.userId || 'user_meena';
-      const { text, sessionId = crypto.randomUUID() } = req.body;
+      const { text, sessionId = crypto.randomUUID(), lang } = req.body;
 
       if (!text || typeof text !== 'string') {
         res.status(400).json({ error: 'Text input is required' });
         return;
       }
 
-      const response = await processConversation(db, sessionId, text, userId);
+      const response = await processConversation(db, sessionId, text, userId, lang);
       res.status(200).json({
         sessionId,
         ...response,

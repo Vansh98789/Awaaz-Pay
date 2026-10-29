@@ -45,6 +45,11 @@ export interface PayoutBatchResponse {
     payout_batch_id: string;
     batch_status: string;
   };
+  items?: Array<{
+    transaction_status?: string;
+    payout_item_id?: string;
+    transaction_id?: string;
+  }>;
 }
 
 export interface InvoiceInput {

@@ -13,8 +13,10 @@ import {
   writeAudit,
   createApproval,
   createNotification,
+  hasLedgerRef,
 } from '../db/repository.js';
 import { resolvePayee, buildPaymentContext } from './context.js';
+import { config } from '../config.js';
 
 export interface PreparePaymentParams {
   userId?: string;
@@ -187,8 +189,73 @@ export interface ConfirmPaymentResult {
   alreadyPaid?: boolean;
   message?: string;
   spoken_message?: string;
+  paypalStatus?: string;
   error?: string;
   httpStatus?: number;
+}
+
+export async function refreshPayoutStatus(
+  db: Database.Database,
+  transactionId: string
+): Promise<{ status: string | null; paypalStatus?: string }> {
+  const tx = getTransactionById(db, transactionId);
+  if (!tx) return { status: null };
+  if (tx.status !== 'processing' || !tx.paypal_ref) return { status: tx.status };
+
+  let batch;
+  try {
+    batch = await getPayoutBatch(tx.paypal_ref);
+  } catch {
+    return { status: tx.status };
+  }
+
+  const itemStatus = batch.items?.[0]?.transaction_status?.toUpperCase();
+  const batchStatus = batch.batch_header?.batch_status?.toUpperCase();
+  const status = itemStatus || batchStatus || 'PENDING';
+
+  if (status === 'SUCCESS') {
+    updateTransactionStatus(db, tx.id, 'completed', tx.paypal_ref);
+    writeAudit(db, {
+      user_id: tx.user_id,
+      kind: 'payment_completed',
+      payload: JSON.stringify({ transactionId: tx.id, batchId: tx.paypal_ref, amount: tx.amount }),
+    });
+
+    if (tx.counterparty_type === 'merchant') {
+      const invoice = db.prepare<[string, number], { id: string; paypal_invoice_id: string; currency: string }>(
+        "SELECT id, paypal_invoice_id, currency FROM invoices WHERE merchant_id = ? AND amount = ? AND status != 'PAID' ORDER BY rowid DESC LIMIT 1"
+      ).get(tx.counterparty_id, tx.amount);
+      if (invoice) {
+        db.prepare("UPDATE invoices SET status = 'PAID' WHERE id = ?").run(invoice.id);
+        if (!invoice.paypal_invoice_id.startsWith('AWZ-INV-')) {
+          const { recordInvoicePayment } = await import('../paypal/invoices.js');
+          await recordInvoicePayment(invoice.paypal_invoice_id, tx.amount, invoice.currency).catch(() => {});
+        }
+      }
+    }
+    return { status: 'completed', paypalStatus: status };
+  }
+
+  if (['FAILED', 'DENIED', 'CANCELED', 'CANCELLED', 'BLOCKED', 'RETURNED', 'REFUNDED', 'REVERSED'].includes(status)) {
+    const refundRef = `ref_${tx.id}`;
+    if (!hasLedgerRef(db, refundRef)) {
+      addLedgerEntry(db, {
+        user_id: tx.user_id,
+        delta: tx.amount,
+        reason: `Refund reservation for failed tx ${tx.id}`,
+        ref: refundRef,
+      });
+    }
+    updateTransactionStatus(db, tx.id, 'failed', tx.paypal_ref);
+    writeAudit(db, {
+      user_id: tx.user_id,
+      kind: 'payment_payout_failed',
+      payload: JSON.stringify({ transactionId: tx.id, batchId: tx.paypal_ref, paypalStatus: status }),
+    });
+    return { status: 'failed', paypalStatus: status };
+  }
+
+  return { status: 'processing', paypalStatus: status };
 }
 
 export async function confirmPayment(
@@ -226,6 +293,26 @@ export async function confirmPayment(
   }
 
   if (tx.status === 'processing') {
+    const refreshedStatus = await refreshPayoutStatus(db, tx.id);
+    if (refreshedStatus.status === 'completed') {
+      return {
+        status: 'completed',
+        alreadyPaid: true,
+        transactionId: tx.id,
+        batchId: tx.paypal_ref || undefined,
+        newBalance: getBalance(db, tx.user_id),
+        httpStatus: 200,
+      };
+    }
+    if (refreshedStatus.status === 'failed') {
+      return {
+        status: 'failed',
+        transactionId: tx.id,
+        error: 'PayPal marked this payout as failed.',
+        spoken_message: 'Payment failed and the reserved amount was returned to your wallet.',
+        httpStatus: 200,
+      };
+    }
     return {
       status: 'processing',
       transactionId: tx.id,
@@ -301,47 +388,113 @@ export async function confirmPayment(
     payload: JSON.stringify({ transactionId: tx.id, amount: tx.amount }),
   });
 
-  let recipientEmail = 'receiver@sandbox.paypal.com';
+  let recipientEmail = config.PAYPAL_SANDBOX_RECEIVER_EMAIL || '';
   if (tx.counterparty_type === 'contact') {
     const c = db
       .prepare<[string], { paypal_email: string }>('SELECT paypal_email FROM contacts WHERE id = ?')
       .get(tx.counterparty_id);
-    if (c?.paypal_email) recipientEmail = c.paypal_email;
+    if (c?.paypal_email && !c.paypal_email.endsWith('@example.com')) {
+      recipientEmail = c.paypal_email;
+    }
   } else if (tx.counterparty_type === 'merchant') {
     const m = db
       .prepare<[string], { paypal_email: string }>('SELECT paypal_email FROM merchants WHERE id = ?')
       .get(tx.counterparty_id);
-    if (m?.paypal_email) recipientEmail = m.paypal_email;
+    if (m?.paypal_email && !m.paypal_email.endsWith('@example.com')) {
+      recipientEmail = m.paypal_email;
+    } else if (tx.counterparty_id === 'merchant_ravi_cabs') {
+      recipientEmail = config.PAYPAL_SANDBOX_MERCHANT_RECIPIENT_EMAIL
+        || config.PAYPAL_SANDBOX_RECEIVER_EMAIL
+        || recipientEmail;
+    }
   } else if (tx.counterparty_id.includes('@')) {
     recipientEmail = tx.counterparty_id;
   }
 
+  let batchId = '';
+  let batchStatus = '';
+  const paypalAmount = tx.currency === 'INR'
+    ? Math.round(tx.amount * config.PAYPAL_SANDBOX_INR_TO_USD_RATE * 100) / 100
+    : tx.amount;
+  const paypalCurrency = tx.currency === 'INR' ? 'USD' : tx.currency;
+
   try {
+    if (paypalAmount <= 0) throw new Error('PayPal payout amount is below the smallest supported unit.');
     const payoutBatch = await createPayoutBatch([
       {
         recipient_email: recipientEmail,
-        amount: tx.amount,
-        currency: tx.currency === 'INR' ? 'USD' : tx.currency,
+        amount: paypalAmount,
+        currency: paypalCurrency,
         note: `Payment from Awaaz Pay user`,
         sender_item_id: tx.id,
       },
     ]);
 
-    const batchId = payoutBatch.batch_header?.payout_batch_id || `batch-${Date.now()}`;
-    let batchStatus = payoutBatch.batch_header?.batch_status || 'SUCCESS';
+    batchId = payoutBatch.batch_header?.payout_batch_id || '';
+    batchStatus = payoutBatch.items?.[0]?.transaction_status?.toUpperCase()
+      || payoutBatch.batch_header?.batch_status?.toUpperCase()
+      || '';
+    if (!batchId || !batchStatus) {
+      throw new Error('PayPal did not return a payout batch ID and status.');
+    }
 
-    if (batchStatus === 'PENDING') {
+    if (['PENDING', 'PROCESSING', 'ACKNOWLEDGED'].includes(batchStatus)) {
       try {
         const poll = await getPayoutBatch(batchId);
-        batchStatus = poll.batch_header?.batch_status || batchStatus;
+        batchStatus = poll.items?.[0]?.transaction_status?.toUpperCase()
+          || poll.batch_header?.batch_status?.toUpperCase()
+          || batchStatus;
       } catch {
         // Fallback
       }
     }
 
-    if (batchStatus === 'FAILED' || batchStatus === 'DENIED' || batchStatus === 'CANCELED') {
+    if (['FAILED', 'DENIED', 'CANCELED', 'CANCELLED', 'BLOCKED', 'RETURNED', 'REFUNDED', 'REVERSED'].includes(batchStatus)) {
       throw new Error(`PayPal payout batch status: ${batchStatus}`);
     }
+
+    if (batchStatus !== 'SUCCESS') {
+      updateTransactionStatus(db, tx.id, 'processing', batchId);
+      writeAudit(db, {
+        user_id: tx.user_id,
+        kind: 'payment_payout_pending',
+        payload: JSON.stringify({ transactionId: tx.id, batchId, batchStatus, paypalAmount, paypalCurrency }),
+      });
+      return {
+        status: 'processing',
+        transactionId: tx.id,
+        batchId,
+        paypalStatus: batchStatus,
+        message: `PayPal payout status: ${batchStatus}.`,
+        spoken_message: `PayPal is still processing this payment. PayPal status is ${batchStatus}. Do not retry this payment.`,
+        httpStatus: 202,
+      };
+    }
+  } catch (err) {
+    const errMsg = (err as Error).message || '';
+    // A failed PayPal call must never be reported as a successful transfer.
+    addLedgerEntry(db, {
+      user_id: tx.user_id,
+      delta: tx.amount,
+      reason: `Refund reservation for failed tx ${tx.id}`,
+      ref: `ref_${tx.id}`,
+    });
+
+    updateTransactionStatus(db, tx.id, 'failed');
+    writeAudit(db, {
+      user_id: tx.user_id,
+      kind: 'payment_payout_failed',
+      payload: JSON.stringify({ transactionId: tx.id, error: errMsg }),
+    });
+
+    return {
+      status: 'failed',
+      transactionId: tx.id,
+      error: `Payout dispatch failed: ${errMsg}`,
+      spoken_message: 'Payment failed and amount was refunded to your wallet.',
+      httpStatus: 500,
+    };
+  }
 
     updateTransactionStatus(db, tx.id, 'completed', batchId);
 
@@ -355,11 +508,13 @@ export async function confirmPayment(
           .get(tx.counterparty_id, tx.amount);
         if (inv) {
           db.prepare("UPDATE invoices SET status = 'PAID' WHERE id = ?").run(inv.id);
-          import('../paypal/invoices.js')
-            .then(({ recordInvoicePayment }) => {
-              recordInvoicePayment(inv.paypal_invoice_id, tx.amount, inv.currency).catch(() => {});
-            })
-            .catch(() => {});
+          if (!inv.paypal_invoice_id.startsWith('AWZ-INV-')) {
+            import('../paypal/invoices.js')
+              .then(({ recordInvoicePayment }) => {
+                recordInvoicePayment(inv.paypal_invoice_id, tx.amount, inv.currency).catch(() => {});
+              })
+              .catch(() => {});
+          }
         }
       } catch {
         // Ignored
@@ -369,7 +524,7 @@ export async function confirmPayment(
     writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_completed',
-      payload: JSON.stringify({ transactionId: tx.id, batchId, amount: tx.amount }),
+      payload: JSON.stringify({ transactionId: tx.id, batchId, amount: tx.amount, paypalAmount, paypalCurrency }),
     });
 
     const newBalance = getBalance(db, tx.user_id);
@@ -381,30 +536,4 @@ export async function confirmPayment(
       spoken_message: `Payment of ₹${tx.amount} completed successfully.`,
       httpStatus: 200,
     };
-  } catch (payoutErr) {
-    addLedgerEntry(db, {
-      user_id: tx.user_id,
-      delta: tx.amount,
-      reason: `Reversal for failed tx ${tx.id}`,
-      ref: `rev_${tx.id}`,
-    });
-
-    updateTransactionStatus(db, tx.id, 'failed');
-    writeAudit(db, {
-      user_id: tx.user_id,
-      kind: 'payment_failed_reversed',
-      payload: JSON.stringify({
-        transactionId: tx.id,
-        error: (payoutErr as Error).message,
-      }),
-    });
-
-    return {
-      status: 'failed',
-      transactionId: tx.id,
-      error: (payoutErr as Error).message,
-      spoken_message: 'Payment failed and amount was refunded to your wallet.',
-      httpStatus: 500,
-    };
-  }
 }

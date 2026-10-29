@@ -73,6 +73,16 @@ function findContact(text: string, contacts: string[]): string | null {
   return null;
 }
 
+export function extractPaymentDetails(text: string, contacts: string[]): {
+  amount: number | null;
+  recipient_alias: string | null;
+} {
+  return {
+    amount: parseAmount(text),
+    recipient_alias: findContact(text, contacts),
+  };
+}
+
 export function detectLang(text: string): 'hi' | 'en' | 'hinglish' {
   if (/[\u0900-\u097F]/.test(text)) return 'hi';
   if (/\b(bhej|paisa|kitna|mera|karo|hai|ko|ka|ki|nahi|haan|bhai|rupay|hazaar|sau)\b/i.test(text)) {

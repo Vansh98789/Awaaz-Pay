@@ -1,5 +1,10 @@
 import type Database from 'better-sqlite3';
 import crypto from 'node:crypto';
+import {
+  syncTransactionToNeon,
+  syncLedgerToNeon,
+  syncAuditToNeon,
+} from './neon.js';
 import type {
   AuditEvent,
   Contact,
@@ -55,6 +60,17 @@ export function addLedgerEntry(
     record.ref,
     record.created_at
   );
+
+  syncLedgerToNeon({
+    id: record.id,
+    user_id: record.user_id,
+    direction: record.delta >= 0 ? 'credit' : 'debit',
+    amount: Math.abs(record.delta),
+    balance_after: getBalance(db, record.user_id),
+    reason: record.reason,
+    created_at: record.created_at,
+  }).catch(() => {});
+
   return record;
 }
 
@@ -105,6 +121,8 @@ export function recordTransaction(
     record.created_at
   );
 
+  syncTransactionToNeon(record).catch(() => {});
+
   return record;
 }
 
@@ -127,6 +145,11 @@ export function updateTransactionStatus(
     );
   } else {
     db.prepare('UPDATE transactions SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  const updatedTx = getTransactionById(db, id);
+  if (updatedTx) {
+    syncTransactionToNeon(updatedTx).catch(() => {});
   }
 }
 
@@ -152,6 +175,9 @@ export function writeAudit(
     record.payload,
     record.created_at
   );
+
+  syncAuditToNeon(record).catch(() => {});
+
   return record;
 }
 

@@ -35,6 +35,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   const [showManualInput, setShowManualInput] = useState<boolean>(false);
   const [manualCode, setManualCode] = useState<string>('');
   const [timeoutExpired, setTimeoutExpired] = useState<boolean>(false);
+  const [cameraStarted, setCameraStarted] = useState<boolean>(false);
 
   const lastSpokenGuidanceRef = useRef<GuidanceMessage | null>(null);
   const lastSpokenTimeRef = useRef<number>(0);
@@ -96,6 +97,17 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
       setTimeoutExpired(false);
       scanningActiveRef.current = true;
 
+      if (!window.isSecureContext) {
+        throw new Error(lang === 'hi-IN'
+          ? 'Camera ke liye HTTPS zaroori hai. App ko https:// address se kholein.'
+          : 'Camera access requires HTTPS. Open Awaaz Pay using its https:// address.');
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(lang === 'hi-IN'
+          ? 'Is browser mein camera access supported nahi hai.'
+          : 'Camera access is not supported by this browser.');
+      }
+
       // 20-second timeout
       timeoutTimerRef.current = setTimeout(() => {
         if (scanningActiveRef.current) {
@@ -120,11 +132,23 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
         await videoRef.current.play();
+        setCameraStarted(true);
         requestAnimationFrame(scanFrame);
       }
     } catch (err) {
-      const msg = (err as Error).message;
-      setCameraError(`Camera access denied: ${msg}`);
+      scanningActiveRef.current = false;
+      const error = err as Error & { name?: string };
+      const msg = error.message.startsWith('Camera access') || error.message.startsWith('Is browser') || error.message.startsWith('Camera ke')
+        ? error.message
+        : error.name === 'NotAllowedError'
+          ? (lang === 'hi-IN'
+            ? 'Camera permission blocked hai. Browser site settings mein Camera ko Allow karein.'
+            : 'Camera permission is blocked. Allow Camera in this site’s browser settings.')
+          : error.name === 'NotFoundError'
+            ? (lang === 'hi-IN' ? 'Camera nahi mila.' : 'No camera was found on this device.')
+            : (lang === 'hi-IN' ? 'Camera nahi khul paya. Dobara koshish karein.' : 'Could not open the camera. Please try again.');
+      setCameraError(msg);
+      setDisplayMessage(msg);
       const errGuidance =
         lang === 'hi-IN'
           ? 'Camera nahi khul paya. Kripya code manually dalein.'
@@ -139,8 +163,9 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
       stopCamera();
       return;
     }
-
-    startCamera();
+    setCameraStarted(false);
+    setCameraError(null);
+    setTimeoutExpired(false);
     return () => {
       stopCamera();
     };
@@ -244,7 +269,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Invoice QR Code Scanner"
+      aria-label="QR Code Scanner"
       style={{
         position: 'fixed',
         top: 0,
@@ -261,7 +286,12 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
       }}
     >
       <header style={{ width: '100%', textAlign: 'center' }}>
-        <Headline level={1}>{lang === 'hi-IN' ? 'QR Code Scan' : 'Scan Invoice QR'}</Headline>
+        <Headline level={1}>{lang === 'hi-IN' ? 'QR Code Scan' : 'Scan a QR code'}</Headline>
+        <BodyText muted style={{ marginTop: '0.5rem' }}>
+          {lang === 'hi-IN'
+            ? 'Invoice QR ya Awaaz Pay recipient QR scan karein. Recipient QR mein naam aur PayPal email hota hai.'
+            : 'Scan a PayPal invoice QR or an Awaaz Pay recipient QR. Recipient codes contain a name and PayPal email.'}
+        </BodyText>
         {/* Prominent Spoken & Live Status Guidance */}
         <div
           role="status"
@@ -300,11 +330,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
           justifyContent: 'center',
         }}
       >
-        <video
-          ref={videoRef}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          muted
-        />
+        <video ref={videoRef} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted />
         <canvas ref={canvasRef} style={{ display: 'none' }} />
 
         {/* Dotted target frame overlay */}
@@ -320,6 +346,16 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
           }}
         />
       </main>
+
+      {(!cameraStarted && !showManualInput) || cameraError ? (
+        <div style={{ width: '100%', maxWidth: '420px' }}>
+          <BigButton variant="primary" onClick={startCamera}>
+            {cameraError
+              ? (lang === 'hi-IN' ? 'Camera dobara koshish karein' : 'Try camera again')
+              : (lang === 'hi-IN' ? 'Camera chalu karein' : 'Enable camera and scan')}
+          </BigButton>
+        </div>
+      ) : null}
 
       {timeoutExpired && (
         <div style={{ width: '100%', maxWidth: '420px' }}>

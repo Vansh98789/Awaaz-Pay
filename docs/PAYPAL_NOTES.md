@@ -28,3 +28,13 @@ To solve this cleanly in Awaaz Pay:
 ## 2. Voice Authentication as a Secondary Risk Signal
 - WebAuthn fingerprint passkeys serve as the primary cryptographic barrier for authentication.
 - Spoken challenge phrase matching provides a secondary behavioral signal to adjust risk scoring, without locking out users due to acoustic background noise or dialect variations.
+
+## 3. Sandbox fallback when Invoicing API access is unavailable
+
+The merchant portal now falls back to an Awaaz Pay wallet QR when PayPal rejects invoice creation or sending. The QR contains a local registry invoice ID, and the wallet resolves the merchant and fixed amount from that registry. After the user confirms, the existing Payouts flow sends a sandbox payout. This fallback is **not** a PayPal invoice or PayPal-hosted invoice checkout; the portal labels it as an Awaaz Pay wallet QR.
+
+For the demo merchant, `PAYPAL_SANDBOX_MERCHANT_EMAIL` identifies the business account used as the PayPal invoicer. The payout recipient uses `PAYPAL_SANDBOX_MERCHANT_RECIPIENT_EMAIL` when configured, otherwise `PAYPAL_SANDBOX_RECEIVER_EMAIL`. Seed placeholder addresses are not used for these sandbox payouts. Payout API errors are returned as failures and the wallet reservation is reversed; they are never converted into synthetic successful payout IDs.
+
+## 4. Wallet balance and PayPal balance are separate
+
+The app's displayed wallet balance is calculated from its own `wallet_ledger`. It is not a readout of the PayPal business account's balance. PayPal is used as the sandbox payout rail; a successful sandbox batch is stored as the transaction reference. The sandbox demo maps INR ledger amounts to USD payouts using `PAYPAL_SANDBOX_INR_TO_USD_RATE` (default `0.012`, an illustrative fixed rate, not a live FX quote). Sandbox payments do not move real money.

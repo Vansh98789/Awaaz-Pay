@@ -17,6 +17,65 @@ import type { ContactStatus } from '../db/types.js';
 export function createContactsRouter(db: Database.Database): Router {
   const router = Router();
 
+  // QR supplied recipient details are never promoted directly to trusted status.
+  router.post('/scan', (req: Request, res: Response) => {
+    try {
+      const userId = req.body.userId || req.user?.id || 'user_meena';
+      const displayName = typeof req.body.displayName === 'string' ? req.body.displayName.trim() : '';
+      const paypalEmail = typeof req.body.paypalEmail === 'string' ? req.body.paypalEmail.trim() : '';
+      if (!displayName || displayName.length > 80 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paypalEmail)) {
+        res.status(400).json({ error: 'A recipient name and valid PayPal email are required' });
+        return;
+      }
+
+      const existing = db.prepare<[string, string], import('../db/types.js').Contact>(
+        'SELECT * FROM contacts WHERE user_id = ? AND LOWER(paypal_email) = LOWER(?) LIMIT 1'
+      ).get(userId, paypalEmail);
+      if (existing) {
+        res.status(200).json({ contact: existing, existing: true, inCoolingOff: existing.status === 'cooling_off' });
+        return;
+      }
+      const sameName = db.prepare<[string, string], { id: string }>(
+        'SELECT id FROM contacts WHERE user_id = ? AND LOWER(display_name) = LOWER(?) LIMIT 1'
+      ).get(userId, displayName);
+      if (sameName) {
+        res.status(409).json({ error: 'A contact already uses that name. Ask a helper to add a unique spoken nickname.' });
+        return;
+      }
+
+      const now = new Date();
+      const coolingHoursRaw = Number.parseInt(process.env.CONTACT_COOLING_OFF_HOURS || '24', 10);
+      const coolingHours = Number.isFinite(coolingHoursRaw) ? Math.max(1, Math.min(coolingHoursRaw, 168)) : 24;
+      const activatedAt = new Date(now.getTime() + coolingHours * 60 * 60 * 1000).toISOString();
+      const alias = displayName;
+      const contact = upsertContact(db, {
+        id: `contact_${crypto.randomUUID().slice(0, 8)}`,
+        user_id: userId,
+        alias,
+        display_name: displayName,
+        paypal_email: paypalEmail,
+        status: 'cooling_off',
+        added_by: 'recipient_qr',
+        activated_at: activatedAt,
+      });
+
+      createNotification(db, {
+        user_id: userId,
+        kind: 'contact_added',
+        message: `New recipient QR scanned: ${displayName} (${paypalEmail}). Held for ${coolingHours} hours.`,
+        spoken_text: `Naya payee QR se joda gaya: ${displayName}. Suraksha ke liye cooling-off period lagu hai.`,
+      });
+      writeAudit(db, {
+        user_id: userId,
+        kind: 'recipient_qr_scanned',
+        payload: JSON.stringify({ contactId: contact.id, displayName, paypalEmail, coolingHours }),
+      });
+      res.status(201).json({ contact, existing: false, inCoolingOff: true, coolingHours });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // 1. List contacts
   router.get('/', (req: Request, res: Response) => {
     try {
