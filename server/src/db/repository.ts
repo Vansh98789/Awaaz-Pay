@@ -103,6 +103,28 @@ export function recordTransaction(
   return record;
 }
 
+export function getTransactionById(db: Database.Database, id: string): Transaction | null {
+  const stmt = db.prepare<[string], Transaction>('SELECT * FROM transactions WHERE id = ?');
+  return stmt.get(id) ?? null;
+}
+
+export function updateTransactionStatus(
+  db: Database.Database,
+  id: string,
+  status: string,
+  paypalRef?: string | null
+): void {
+  if (paypalRef !== undefined) {
+    db.prepare('UPDATE transactions SET status = ?, paypal_ref = ? WHERE id = ?').run(
+      status,
+      paypalRef,
+      id
+    );
+  } else {
+    db.prepare('UPDATE transactions SET status = ? WHERE id = ?').run(status, id);
+  }
+}
+
 export function writeAudit(
   db: Database.Database,
   event: Omit<AuditEvent, 'id' | 'created_at'> & { id?: string; created_at?: string }

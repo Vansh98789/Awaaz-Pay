@@ -8,6 +8,7 @@ import { getDb } from './db/connection.js';
 import { createFamilyRouter } from './routes/family.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createNotificationsRouter } from './routes/notifications.js';
+import { createPaymentsRouter } from './routes/payments.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,6 +36,7 @@ export function createApp(db?: Database.Database): Express {
   app.use('/api/family', createFamilyRouter(database));
   app.use('/api/webhooks', createWebhooksRouter(database));
   app.use('/api/notifications', createNotificationsRouter(database));
+  app.use('/api/payments', createPaymentsRouter(database));
 
   if (fs.existsSync(webDistPath)) {
     app.use(express.static(webDistPath));

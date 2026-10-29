@@ -24,6 +24,7 @@ export function seedDemoData(db: Database.Database): SeedResult {
   runMigrations(db);
 
   const now = new Date().toISOString();
+  const pastActiveDate = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
   const user = upsertUser(db, {
     id: 'user_meena',
@@ -53,7 +54,7 @@ export function seedDemoData(db: Database.Database): SeedResult {
     paypal_email: 'bhaiya-sandbox@example.com',
     status: 'active',
     added_by: guardian.id,
-    activated_at: now,
+    activated_at: pastActiveDate,
   });
 
   const contact2 = upsertContact(db, {
@@ -64,7 +65,7 @@ export function seedDemoData(db: Database.Database): SeedResult {
     paypal_email: 'sabzi-sandbox@example.com',
     status: 'active',
     added_by: user.id,
-    activated_at: now,
+    activated_at: pastActiveDate,
   });
 
   const merchant = upsertMerchant(db, {
