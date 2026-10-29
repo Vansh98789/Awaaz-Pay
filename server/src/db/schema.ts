@@ -69,8 +69,10 @@ export function runMigrations(db: Database.Database): void {
       id TEXT PRIMARY KEY,
       transaction_id TEXT NOT NULL,
       guardian_id TEXT NOT NULL,
-      token TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE,
       status TEXT NOT NULL,
+      created_at TEXT,
+      expires_at TEXT,
       decided_at TEXT,
       FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
       FOREIGN KEY (guardian_id) REFERENCES guardians(id) ON DELETE CASCADE

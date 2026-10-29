@@ -112,5 +112,48 @@ export function createFamilyRouter(db: Database.Database): Router {
     }
   });
 
+  router.post('/emergency-limit', (req: Request, res: Response) => {
+    try {
+      const { userId = 'user_meena', additionalDailyLimit = 5000, perPaymentLimit = 5000 } = req.body;
+      const user = getUserById(db, userId);
+      if (!user) {
+        res.status(404).json({ error: 'User not found' });
+        return;
+      }
+
+      let limits = { daily_total: 1000, per_transaction_new_payee: 500, max_new_payees_per_day: 2 };
+      try {
+        limits = JSON.parse(user.limits);
+      } catch {
+        // default
+      }
+
+      limits.daily_total += Number(additionalDailyLimit);
+      limits.per_transaction_new_payee = Math.max(limits.per_transaction_new_payee, Number(perPaymentLimit));
+
+      db.prepare('UPDATE users SET limits = ? WHERE id = ?').run(JSON.stringify(limits), userId);
+
+      createNotification(db, {
+        user_id: userId,
+        kind: 'emergency_limit_granted',
+        message: `Emergency limit increased by ₹${additionalDailyLimit}. New daily limit: ₹${limits.daily_total}.`,
+        spoken_text: `Ramesh ji ne aapki kharch karne ki limit badha di gayi hai. Nayi limit ₹${limits.daily_total} hai.`,
+      });
+
+      writeAudit(db, {
+        user_id: userId,
+        kind: 'emergency_limit_granted',
+        payload: JSON.stringify({ userId, additionalDailyLimit, limits }),
+      });
+
+      res.status(200).json({
+        success: true,
+        limits,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   return router;
 }

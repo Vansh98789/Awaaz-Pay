@@ -340,3 +340,79 @@ export function updatePasskeyCounter(
   const stmt = db.prepare('UPDATE passkeys SET counter = ? WHERE id = ?');
   stmt.run(counter, id);
 }
+
+export function createApproval(
+  db: Database.Database,
+  approval: Omit<import('./types.js').Approval, 'id'> & { id?: string }
+): import('./types.js').Approval {
+  const record: import('./types.js').Approval = {
+    id: approval.id || crypto.randomUUID(),
+    transaction_id: approval.transaction_id,
+    guardian_id: approval.guardian_id,
+    token: approval.token,
+    status: approval.status,
+    created_at: approval.created_at || new Date().toISOString(),
+    expires_at: approval.expires_at || null,
+    decided_at: approval.decided_at ?? null,
+  };
+
+  const stmt = db.prepare(`
+    INSERT INTO approvals (id, transaction_id, guardian_id, token, status, created_at, expires_at, decided_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    record.id,
+    record.transaction_id,
+    record.guardian_id,
+    record.token,
+    record.status,
+    record.created_at,
+    record.expires_at,
+    record.decided_at
+  );
+  return record;
+}
+
+export function getApprovalByToken(
+  db: Database.Database,
+  token: string
+): import('./types.js').Approval | null {
+  const stmt = db.prepare<[string], import('./types.js').Approval>(
+    'SELECT * FROM approvals WHERE token = ?'
+  );
+  return stmt.get(token) ?? null;
+}
+
+export function getApprovalByTransactionId(
+  db: Database.Database,
+  transactionId: string
+): import('./types.js').Approval | null {
+  const stmt = db.prepare<[string], import('./types.js').Approval>(
+    'SELECT * FROM approvals WHERE transaction_id = ? ORDER BY created_at DESC LIMIT 1'
+  );
+  return stmt.get(transactionId) ?? null;
+}
+
+export function updateApprovalStatus(
+  db: Database.Database,
+  token: string,
+  status: string,
+  decidedAt = new Date().toISOString()
+): void {
+  const stmt = db.prepare('UPDATE approvals SET status = ?, decided_at = ? WHERE token = ?');
+  stmt.run(status, decidedAt, token);
+}
+
+export function getContactById(
+  db: Database.Database,
+  id: string
+): import('./types.js').Contact | null {
+  const stmt = db.prepare<[string], import('./types.js').Contact>(
+    'SELECT * FROM contacts WHERE id = ?'
+  );
+  return stmt.get(id) ?? null;
+}
+
+export function deleteContact(db: Database.Database, id: string): void {
+  db.prepare('DELETE FROM contacts WHERE id = ?').run(id);
+}

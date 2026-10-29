@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from './hooks/useSpeechSynthesis';
+import { GuardianApprovePage } from './pages/GuardianApprovePage';
+import { OnboardingWizard } from './pages/OnboardingWizard';
 
 interface TranscriptEntry {
   id: string;
@@ -23,11 +25,53 @@ interface VoiceChallengeState {
 }
 
 export const App: React.FC = () => {
+  const [currentRoute, setCurrentRoute] = useState<{
+    path: 'wallet' | 'approve' | 'onboarding';
+    token?: string;
+  }>(() => {
+    const path = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    if (path.startsWith('/approve/')) {
+      return { path: 'approve', token: path.replace('/approve/', '').replace(/^\//, '') };
+    }
+    if (hash.startsWith('#/approve/') || hash.startsWith('#approve/')) {
+      return { path: 'approve', token: hash.replace(/^#(|\/)approve\//, '') };
+    }
+    if (path === '/onboarding' || hash === '#/onboarding' || hash === '#onboarding') {
+      return { path: 'onboarding' };
+    }
+    return { path: 'wallet' };
+  });
+
   const [lang, setLang] = useState<'hi-IN' | 'en-IN'>('hi-IN');
   const [authState, setAuthState] = useState<'checking' | 'unauthenticated' | 'authenticated'>('checking');
   const [authError, setAuthError] = useState<string | null>(null);
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
   const [voiceChallenge, setVoiceChallenge] = useState<VoiceChallengeState>({ isOpen: false });
+  const [pendingApprovalTxId, setPendingApprovalTxId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const path = window.location.pathname;
+      const hash = window.location.hash;
+      if (path.startsWith('/approve/')) {
+        setCurrentRoute({ path: 'approve', token: path.replace('/approve/', '').replace(/^\//, '') });
+      } else if (hash.startsWith('#/approve/') || hash.startsWith('#approve/')) {
+        setCurrentRoute({ path: 'approve', token: hash.replace(/^#(|\/)approve\//, '') });
+      } else if (path === '/onboarding' || hash === '#/onboarding' || hash === '#onboarding') {
+        setCurrentRoute({ path: 'onboarding' });
+      } else {
+        setCurrentRoute({ path: 'wallet' });
+      }
+    };
+
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
+  }, []);
 
   const sessionIdRef = useRef<string>(
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -69,6 +113,64 @@ export const App: React.FC = () => {
     }
     checkAuth();
   }, []);
+
+  // Poll for guardian approval when transaction is waiting
+  useEffect(() => {
+    if (!pendingApprovalTxId) return;
+
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/approvals/status/${pendingApprovalTxId}`);
+        if (!res.ok) return;
+        const info = await res.json();
+        if (!isMounted) return;
+
+        if (info.approvalStatus === 'approved') {
+          clearInterval(interval);
+          setPendingApprovalTxId(null);
+          const approvedMsg =
+            lang === 'hi-IN'
+              ? 'Ramesh ji ne payment ki manzoori de di hai. Payment bhejne ke liye "haan" bolein.'
+              : 'Guardian has approved this payment. Say "yes" to complete.';
+          speak(approvedMsg, { lang });
+          setTranscripts((prev) => [
+            ...prev,
+            {
+              id: `a-${Date.now()}`,
+              sender: 'assistant',
+              text: approvedMsg,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            },
+          ]);
+        } else if (info.approvalStatus === 'denied') {
+          clearInterval(interval);
+          setPendingApprovalTxId(null);
+          const deniedMsg =
+            lang === 'hi-IN'
+              ? 'Ramesh ji ne payment reject kar diya hai. Payment cancel ho gaya hai.'
+              : 'Guardian has denied this payment. Payment has been cancelled.';
+          speak(deniedMsg, { lang });
+          setTranscripts((prev) => [
+            ...prev,
+            {
+              id: `a-${Date.now()}`,
+              sender: 'assistant',
+              text: deniedMsg,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            },
+          ]);
+        }
+      } catch {
+        // Ignored
+      }
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [pendingApprovalTxId, lang, speak]);
 
   // Passkey Login Flow
   const handlePasskeyLogin = async () => {
@@ -302,7 +404,12 @@ export const App: React.FC = () => {
         replyText: string;
         replyLanguage: 'hi' | 'en';
         state: string;
+        actions?: { transactionId?: string };
       };
+
+      if (data.state === 'awaiting_guardian_approval' && data.actions?.transactionId) {
+        setPendingApprovalTxId(data.actions.transactionId);
+      }
 
       const replyLangCode = data.replyLanguage === 'en' ? 'en-IN' : 'hi-IN';
 
@@ -361,11 +468,27 @@ export const App: React.FC = () => {
     speak(switchMsg, { lang: nextLang });
   };
 
+  if (currentRoute.path === 'approve' && currentRoute.token) {
+    return <GuardianApprovePage token={currentRoute.token} />;
+  }
+
+  if (currentRoute.path === 'onboarding') {
+    return <OnboardingWizard />;
+  }
+
   return (
     <div className="app-container">
       <header className="app-header">
         <h1 className="app-title">Awaaz Pay</h1>
         <div className="header-controls">
+          <a
+            href="/onboarding"
+            className="action-pill-btn"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+            aria-label="Open assisted onboarding wizard"
+          >
+            👥 Onboarding
+          </a>
           {authState === 'authenticated' && (
             <button
               type="button"

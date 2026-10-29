@@ -7,6 +7,7 @@ import {
   createNotification,
   writeAudit,
   recordTransaction,
+  getApprovalByTransactionId,
 } from '../db/repository.js';
 import { preparePayment, confirmPayment } from '../payments/pipeline.js';
 import { resolvePayee, buildPaymentContext } from '../payments/context.js';
@@ -106,6 +107,88 @@ export async function processConversation(
         }
         replyText = templates[lang].unclear_cancel;
         resetSession(sessionId);
+      }
+    }
+  } else if (session.state === 'awaiting_guardian_approval') {
+    const approval = session.currentTransactionId
+      ? getApprovalByTransactionId(db, session.currentTransactionId)
+      : null;
+    const guardian = db
+      .prepare<[string], { name: string }>(
+        'SELECT name FROM guardians WHERE user_id = ?'
+      )
+      .get(userId);
+    const guardianName = guardian?.name || 'Ramesh';
+
+    if (approval?.status === 'approved') {
+      const intentResult = await parseIntent(
+        text,
+        contactAliases,
+        'awaiting_confirmation'
+      );
+
+      if (intentResult.intent === 'confirm_yes') {
+        const confirmRes = await confirmPayment(db, {
+          transactionId: session.currentTransactionId!,
+          userConfirmed: true,
+        });
+
+        if (confirmRes.status === 'completed') {
+          replyText = templates[lang].payment_success(
+            session.pendingPayeeName || 'Payee',
+            session.pendingAmount || 0,
+            confirmRes.newBalance
+          );
+        } else if (confirmRes.error?.includes('Insufficient balance')) {
+          replyText = templates[lang].insufficient_funds(
+            confirmRes.balance || 0,
+            session.pendingAmount || 0
+          );
+        } else {
+          replyText = templates[lang].payment_failed;
+        }
+
+        resetSession(sessionId);
+      } else if (
+        intentResult.intent === 'confirm_no' ||
+        intentResult.intent === 'cancel'
+      ) {
+        if (session.currentTransactionId) {
+          await confirmPayment(db, {
+            transactionId: session.currentTransactionId,
+            userConfirmed: false,
+          });
+        }
+        replyText = templates[lang].payment_cancelled;
+        resetSession(sessionId);
+      } else {
+        replyText = templates[lang].ask_confirmation(
+          session.pendingPayeeName || 'Payee',
+          session.pendingAmount || 0
+        );
+      }
+    } else if (approval?.status === 'denied') {
+      replyText =
+        lang === 'hi'
+          ? `${guardianName} ji ne yeh payment reject kar diya hai. Payment cancel ho gaya hai.`
+          : `${guardianName} denied this payment. The payment has been cancelled.`;
+      resetSession(sessionId);
+    } else {
+      const intentResult = await parseIntent(text, contactAliases, 'idle');
+      if (intentResult.intent === 'cancel') {
+        if (session.currentTransactionId) {
+          await confirmPayment(db, {
+            transactionId: session.currentTransactionId,
+            userConfirmed: false,
+          });
+        }
+        replyText = templates[lang].payment_cancelled;
+        resetSession(sessionId);
+      } else {
+        replyText =
+          lang === 'hi'
+            ? `${guardianName} ji ki manzoori ka intezaar hai. Kripya thoda intezaar karein.`
+            : `Waiting for ${guardianName}'s approval. Please wait.`;
       }
     }
   } else if (session.state === 'awaiting_scam_answers') {
@@ -210,6 +293,8 @@ export async function processConversation(
           updateSession(sessionId, {
             state: 'awaiting_guardian_approval',
             currentTransactionId: prep.transactionId,
+            pendingPayeeName: session.pendingPayeeName || prep.payee,
+            pendingAmount: session.pendingAmount || prep.amount,
           });
           const guardian = db
             .prepare<[string], { name: string }>(
@@ -312,6 +397,8 @@ export async function processConversation(
         updateSession(sessionId, {
           state: 'awaiting_guardian_approval',
           currentTransactionId: prep.transactionId,
+          pendingPayeeName: session.pendingPayeeName || prep.payee,
+          pendingAmount: session.pendingAmount || prep.amount,
         });
         const guardian = db
           .prepare<[string], { name: string }>(
@@ -341,6 +428,8 @@ export async function processConversation(
           updateSession(sessionId, {
             state: 'awaiting_guardian_approval',
             currentTransactionId: prep.transactionId,
+            pendingPayeeName: session.pendingPayeeName || prep.payee,
+            pendingAmount: session.pendingAmount || prep.amount,
           });
           const guardian = db
             .prepare<[string], { name: string }>(
@@ -460,6 +549,9 @@ export async function processConversation(
             } else if (prep.decision.action === 'need_guardian_approval') {
               updateSession(sessionId, {
                 state: 'awaiting_guardian_approval',
+                currentTransactionId: prep.transactionId,
+                pendingPayeeName: prep.payee,
+                pendingAmount: prep.amount,
               });
               const guardian = db
                 .prepare<[string], { name: string }>(
@@ -492,5 +584,8 @@ export async function processConversation(
     replyText,
     replyLanguage: lang,
     state: currentSession.state,
+    actions: currentSession.currentTransactionId
+      ? { transactionId: currentSession.currentTransactionId }
+      : undefined,
   };
 }

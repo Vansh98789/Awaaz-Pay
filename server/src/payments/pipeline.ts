@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { evaluatePayment } from '../rules/engine.js';
 import type { Decision, PaymentRequest, ScamRiskLevel } from '../rules/types.js';
@@ -10,6 +11,8 @@ import {
   recordTransaction,
   updateTransactionStatus,
   writeAudit,
+  createApproval,
+  createNotification,
 } from '../db/repository.js';
 import { resolvePayee, buildPaymentContext } from './context.js';
 
@@ -29,6 +32,8 @@ export interface PreparePaymentResult {
   payeeEmail: string;
   amount: number;
   status: string;
+  approvalToken?: string;
+  approvalUrl?: string;
 }
 
 export function generateReadbackText(
@@ -86,6 +91,9 @@ export function preparePayment(
   const decision = evaluatePayment(paymentRequest, context);
 
   let status = 'pending_confirmation';
+  let approvalToken: string | undefined;
+  let approvalUrl: string | undefined;
+
   if (decision.action === 'need_guardian_approval') {
     status = 'awaiting_approval';
   } else if (decision.action === 'block') {
@@ -105,6 +113,33 @@ export function preparePayment(
     status,
     paypal_ref: null,
   });
+
+  if (decision.action === 'need_guardian_approval') {
+    const guardian = db
+      .prepare<[string], { id: string }>('SELECT id FROM guardians WHERE user_id = ? LIMIT 1')
+      .get(userId);
+    const guardianId = guardian?.id || 'guardian_ramesh';
+
+    approvalToken = crypto.randomUUID().replace(/-/g, '');
+    approvalUrl = `/approve/${approvalToken}`;
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    createApproval(db, {
+      transaction_id: tx.id,
+      guardian_id: guardianId,
+      token: approvalToken,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      expires_at: expiresAt,
+    });
+
+    createNotification(db, {
+      user_id: userId,
+      kind: 'approval_requested',
+      message: `Guardian approval requested for ₹${amount} to ${resolvedPayee.displayName}.`,
+      spoken_text: `Approval request bhej di gayi hai.`,
+    });
+  }
 
   writeAudit(db, {
     user_id: userId,
@@ -133,6 +168,8 @@ export function preparePayment(
     payeeEmail: resolvedPayee.email,
     amount,
     status: tx.status,
+    approvalToken,
+    approvalUrl,
   };
 }
 
@@ -197,7 +234,13 @@ export async function confirmPayment(
     };
   }
 
-  if (tx.decision !== 'allow_with_confirmation' && tx.status !== 'pending_confirmation') {
+  // Allow confirmation if the decision was allow_with_confirmation OR guardian has approved it (status 'confirmed')
+  const isGuardianApproved = tx.status === 'confirmed';
+  if (
+    tx.decision !== 'allow_with_confirmation' &&
+    tx.status !== 'pending_confirmation' &&
+    !isGuardianApproved
+  ) {
     return {
       status: 'error',
       transactionId: tx.id,

@@ -71,7 +71,9 @@ export interface Approval {
   guardian_id: string;
   token: string;
   status: string;
-  decided_at: string | null;
+  created_at?: string | null;
+  expires_at?: string | null;
+  decided_at?: string | null;
 }
 
 export interface Notification {

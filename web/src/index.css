@@ -521,3 +521,349 @@ body {
   border-color: #f59e0b !important;
   color: #fbbf24 !important;
 }
+
+/* ==========================================================================
+   Task 15: Guardian Approval & Onboarding Wizard Styles
+   ========================================================================== */
+
+.guardian-page-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  max-width: 540px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 1.5rem 1.25rem 2.5rem;
+}
+
+.guardian-header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.guardian-header h1 {
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.guardian-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.guardian-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+.guardian-card.loading {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--text-secondary);
+}
+
+.guardian-card.error-card {
+  text-align: center;
+  border-color: var(--accent-red);
+  padding: 2.5rem 1.5rem;
+}
+
+.guardian-card.error-card h2 {
+  color: var(--accent-red);
+  margin-bottom: 0.75rem;
+}
+
+.guardian-card.result-card {
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+}
+
+.guardian-card.result-card.approved {
+  border-color: var(--accent-green);
+}
+
+.guardian-card.result-card.denied {
+  border-color: var(--accent-red);
+}
+
+.result-icon {
+  font-size: 3.5rem;
+  margin-bottom: 1rem;
+}
+
+.sub-note {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.back-link {
+  display: inline-block;
+  margin-top: 1.5rem;
+  color: var(--accent-cyan);
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.request-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.request-badge {
+  display: inline-block;
+  align-self: flex-start;
+  background-color: rgba(245, 158, 11, 0.15);
+  border: 1px solid #f59e0b;
+  color: #fbbf24;
+  padding: 0.35rem 0.85rem;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.request-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background-color: var(--bg-surface);
+  padding: 1rem 1.25rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--border-subtle);
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 1rem;
+}
+
+.detail-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.detail-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.payee-name {
+  color: var(--accent-cyan);
+  font-weight: 700;
+}
+
+.highlight-row {
+  margin-top: 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.amount-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: #34d399;
+}
+
+.flagged-box {
+  background-color: rgba(239, 68, 68, 0.1);
+  border-left: 4px solid var(--accent-red);
+  padding: 0.85rem 1rem;
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+
+.flagged-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #fca5a5;
+  margin-bottom: 0.25rem;
+}
+
+.flagged-reason {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* Giant Decision Buttons */
+.guardian-buttons-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.giant-decision-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1rem;
+  border-radius: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: 130px;
+  text-align: center;
+}
+
+.giant-decision-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.giant-decision-btn .btn-icon {
+  font-size: 2.2rem;
+  margin-bottom: 0.4rem;
+}
+
+.giant-decision-btn .btn-text {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.giant-decision-btn .btn-subtext {
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+  opacity: 0.85;
+}
+
+.approve-btn {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(21, 128, 61, 0.35));
+  border: 2px solid var(--accent-green);
+  color: #ffffff;
+}
+
+.approve-btn:hover:not(:disabled),
+.approve-btn:focus-visible:not(:disabled) {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.35), rgba(21, 128, 61, 0.5));
+  box-shadow: 0 0 25px var(--accent-green-glow);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+.deny-btn {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(185, 28, 28, 0.35));
+  border: 2px solid var(--accent-red);
+  color: #ffffff;
+}
+
+.deny-btn:hover:not(:disabled),
+.deny-btn:focus-visible:not(:disabled) {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.35), rgba(185, 28, 28, 0.5));
+  box-shadow: 0 0 25px var(--accent-red-glow);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+/* Onboarding Wizard Form Styles */
+.onboarding-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.form-section h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+.form-section label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.form-input {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.85rem;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-family: inherit;
+  transition: border-color 0.2s ease;
+}
+
+.form-input:focus {
+  border-color: var(--accent-cyan);
+  outline: 2px solid var(--focus-ring);
+}
+
+.contacts-subform {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background-color: var(--bg-surface);
+  padding: 0.85rem;
+  border-radius: 0.75rem;
+  border: 1px dashed var(--border-subtle);
+}
+
+.contacts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.contact-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--bg-surface);
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.remove-btn {
+  background: none;
+  border: none;
+  color: var(--accent-red);
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0.2rem 0.5rem;
+}
+
+.voice-enroll-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background-color: var(--bg-surface);
+  padding: 1rem;
+  border-radius: 0.75rem;
+}
+
+.voice-enroll-box p {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.auth-secondary-btn.enrolled {
+  border-color: var(--accent-green) !important;
+  color: #86efac !important;
+}

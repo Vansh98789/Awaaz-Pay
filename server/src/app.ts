@@ -12,6 +12,8 @@ import { createNotificationsRouter } from './routes/notifications.js';
 import { createPaymentsRouter } from './routes/payments.js';
 import { createConverseRouter } from './routes/converse.js';
 import { createAuthRouter } from './routes/auth.js';
+import { createApprovalsRouter } from './routes/approvals.js';
+import { createContactsRouter, createOnboardingRouter } from './routes/contacts.js';
 import { requireAuth } from './auth/middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -44,6 +46,9 @@ export function createApp(db?: Database.Database): Express {
   });
 
   app.use('/api/auth', createAuthRouter(database));
+  app.use('/api/approvals', createApprovalsRouter(database));
+  app.use('/api/contacts', createContactsRouter(database));
+  app.use('/api/onboarding', createOnboardingRouter(database));
   app.use('/api/family', createFamilyRouter(database));
   app.use('/api/webhooks', createWebhooksRouter(database));
   app.use('/api/notifications', createNotificationsRouter(database));
