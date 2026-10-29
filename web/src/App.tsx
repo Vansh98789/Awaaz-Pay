@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from './hooks/useSpeechSynthesis';
 
@@ -11,6 +11,12 @@ interface TranscriptEntry {
 
 export const App: React.FC = () => {
   const [lang, setLang] = useState<'hi-IN' | 'en-IN'>('hi-IN');
+  const sessionIdRef = useRef<string>(
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `sess-${Date.now()}`
+  );
+
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([
     {
       id: 'welcome',
@@ -29,7 +35,7 @@ export const App: React.FC = () => {
       defaultSpeed: 1.0,
     });
 
-  const handleSpeechResult = (text: string) => {
+  const handleSpeechResult = async (text: string) => {
     const nowTime = new Date().toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit',
@@ -42,20 +48,63 @@ export const App: React.FC = () => {
       time: nowTime,
     };
 
-    const echoText =
-      lang === 'hi-IN'
-        ? `Aapne kaha: "${text}".`
-        : `You said: "${text}".`;
+    setTranscripts((prev) => [...prev, userEntry]);
 
-    const assistantEntry: TranscriptEntry = {
-      id: `a-${Date.now()}`,
-      sender: 'assistant',
-      text: echoText,
-      time: nowTime,
-    };
+    try {
+      const res = await fetch('/api/converse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: sessionIdRef.current,
+          text,
+          userId: 'user_meena',
+        }),
+      });
 
-    setTranscripts((prev) => [...prev, userEntry, assistantEntry]);
-    speak(echoText, { lang });
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
+
+      const data = (await res.json()) as {
+        replyText: string;
+        replyLanguage: 'hi' | 'en';
+        state: string;
+      };
+
+      const replyLangCode = data.replyLanguage === 'en' ? 'en-IN' : 'hi-IN';
+
+      const assistantEntry: TranscriptEntry = {
+        id: `a-${Date.now()}`,
+        sender: 'assistant',
+        text: data.replyText,
+        time: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      };
+
+      setTranscripts((prev) => [...prev, assistantEntry]);
+      speak(data.replyText, { lang: replyLangCode });
+    } catch {
+      // Fallback to echo mode if backend unreachable
+      const fallbackText =
+        lang === 'hi-IN'
+          ? `Aapne kaha: "${text}".`
+          : `You said: "${text}".`;
+
+      const assistantEntry: TranscriptEntry = {
+        id: `a-${Date.now()}`,
+        sender: 'assistant',
+        text: fallbackText,
+        time: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      };
+
+      setTranscripts((prev) => [...prev, assistantEntry]);
+      speak(fallbackText, { lang });
+    }
   };
 
   const handleSpeechError = (_code: string, friendlyMsg: string) => {

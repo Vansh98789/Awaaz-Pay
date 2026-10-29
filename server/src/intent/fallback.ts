@@ -6,7 +6,7 @@ const BALANCE = /\b(balance|paisa|kitna|bacha|wallet|account|funds?)\b/i;
 const HISTORY = /\b(history|transactions?|kya\s*hua|dikhao|recent|last|hafte|mahine)\b/i;
 const REPEAT = /\b(dobara|phir|again|repeat|wapas)\b/i;
 const CANCEL = /\b(cancel|band\s*karo|rok|stop|chhodh?o)\b/i;
-const SCAM = /\b(thaga|scam|fraud|dhoka|cheated?)\b/i;
+const SCAM = /(?<!@[\w.-]*)\b(thaga|scam|fraud|dhoka|cheated?)\b/i;
 const HELPER = /\b(helper|sahayak|guardian|add\s*karo)\b/i;
 const EXPLAIN = /\bexplain\b|\b(kyun|kyon|why|kaise)\b.{0,40}\b(payment|transaction|kata|kati|gaya)\b|\b(payment|transaction)\b.{0,40}\b(kyun|kyon|why|kata|kati)\b/i;
 
@@ -22,8 +22,14 @@ function parseHindiAmount(text: string): number | null {
   const tokens = text.replace(/[^\w\s]/g, ' ').toLowerCase().split(/\s+/);
   let total = 0;
   let current = 0;
+  let prev = '';
 
   for (const t of tokens) {
+    if (t === 'do' && (prev === 'bhej' || prev === 'de' || prev === 'kar' || prev === 'karo' || prev === 'mat')) {
+      prev = t;
+      continue;
+    }
+
     if (HINDI_ONES[t] !== undefined) {
       current += HINDI_ONES[t];
     } else if (t === 'sau' || t === 'hundred') {
@@ -37,6 +43,7 @@ function parseHindiAmount(text: string): number | null {
       total += current;
       current = 0;
     }
+    prev = t;
   }
 
   total += current;
@@ -54,6 +61,15 @@ function findContact(text: string, contacts: string[]): string | null {
   for (const c of contacts) {
     if (lower.includes(c.toLowerCase())) return c;
   }
+
+  const emailMatch = text.match(/[\w.-]+@[\w.-]+\.\w+/);
+  if (emailMatch) return emailMatch[0];
+
+  const koMatch = text.match(/(?:^|\s)([\w.-]+)\s+ko\b/i);
+  if (koMatch && !['kisi', 'sab', 'unko', 'inko', 'mujhe', 'humko', 'kisko'].includes(koMatch[1].toLowerCase())) {
+    return koMatch[1];
+  }
+
   return null;
 }
 
