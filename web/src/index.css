@@ -877,3 +877,54 @@ body {
 .flagged-row {
   border-left: 4px solid var(--accent-red) !important;
 }
+
+/* Accessibility: Skip Navigation Link */
+.skip-link {
+  position: absolute;
+  top: -9999px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--accent-amber);
+  color: #09090b;
+  font-weight: 800;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  z-index: 10000;
+  text-decoration: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  outline: 3px solid #ffffff;
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+/* Accessibility: Offline and Network Status Alerts */
+.offline-banner {
+  background-color: var(--accent-red);
+  color: #ffffff;
+  padding: 0.75rem 1rem;
+  font-weight: 700;
+  text-align: center;
+  border-radius: 0.75rem;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+}
+
+.slow-network-banner {
+  background-color: var(--accent-amber);
+  color: #09090b;
+  padding: 0.6rem 1rem;
+  font-weight: 700;
+  text-align: center;
+  border-radius: 0.75rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}

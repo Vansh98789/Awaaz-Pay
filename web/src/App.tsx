@@ -59,6 +59,8 @@ export const App: React.FC = () => {
   const [voiceChallenge, setVoiceChallenge] = useState<VoiceChallengeState>({ isOpen: false });
   const [pendingApprovalTxId, setPendingApprovalTxId] = useState<string | null>(null);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [isSlowNetwork, setIsSlowNetwork] = useState(false);
 
   useEffect(() => {
     const handleLocationChange = () => {
@@ -127,6 +129,35 @@ export const App: React.FC = () => {
     }
     checkAuth();
   }, []);
+
+  // Online / Offline and Network Accessibility Listener
+  useEffect(() => {
+    const handleOffline = () => {
+      setIsOffline(true);
+      const offlineMsg =
+        lang === 'hi-IN'
+          ? 'Internet connection chala gaya hai. Kripya apna network check karein.'
+          : 'Internet connection lost. Please check your network connection.';
+      speak(offlineMsg, { lang });
+    };
+
+    const handleOnline = () => {
+      setIsOffline(false);
+      const onlineMsg =
+        lang === 'hi-IN'
+          ? 'Internet connection vapas jud gaya hai.'
+          : 'Internet connection restored.';
+      speak(onlineMsg, { lang });
+    };
+
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [lang, speak]);
 
   // Poll for guardian approval when transaction is waiting
   useEffect(() => {
@@ -354,8 +385,39 @@ export const App: React.FC = () => {
 
     setTranscripts((prev) => [...prev, userEntry]);
 
+    // Offline accessibility check
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const offlineMsg =
+        lang === 'hi-IN'
+          ? 'Aap offline hain. Kripya apna internet connection check karein.'
+          : 'You are offline. Please check your internet connection.';
+      speak(offlineMsg, { lang });
+      setTranscripts((prev) => [
+        ...prev,
+        {
+          id: `a-${Date.now()}`,
+          sender: 'assistant',
+          text: offlineMsg,
+          time: nowTime,
+        },
+      ]);
+      return;
+    }
+
+    // Slow network detection timer (4 seconds)
+    let slowTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      setIsSlowNetwork(true);
+      const slowMsg =
+        lang === 'hi-IN'
+          ? 'Network thoda dheema hai, kripya intezar karein...'
+          : 'Network is slow, please hold on...';
+      speak(slowMsg, { lang });
+    }, 4000);
+
     // If active voice challenge is running, verify it
     if (voiceChallenge.isOpen && voiceChallenge.challengeId) {
+      if (slowTimer) clearTimeout(slowTimer);
+      setIsSlowNetwork(false);
       try {
         const verifyRes = await fetch('/api/auth/voice-challenge/verify', {
           method: 'POST',
@@ -439,17 +501,29 @@ export const App: React.FC = () => {
 
       setTranscripts((prev) => [...prev, assistantEntry]);
       speak(data.replyText, { lang: replyLangCode });
-    } catch {
-      // Fallback to echo mode if backend unreachable
-      const fallbackText =
-        lang === 'hi-IN'
-          ? `Aapne kaha: "${text}".`
-          : `You said: "${text}".`;
+    } catch (err) {
+      if (slowTimer) clearTimeout(slowTimer);
+      setIsSlowNetwork(false);
+
+      const isNetworkErr =
+        (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        (err as Error).message?.includes('fetch') ||
+        (err as Error).message?.includes('Network');
+
+      const spokenError = isNetworkErr
+        ? lang === 'hi-IN'
+          ? 'Network error: Server se sampark nahi ho saka. Kripya apna connection check karein.'
+          : 'Network error: Unable to reach the server. Please check your connection.'
+        : lang === 'hi-IN'
+          ? 'Kshama karein, ek samasya aayi hai. Dobara koshish karein.'
+          : 'Sorry, an error occurred. Please try again.';
+
+      speak(spokenError, { lang });
 
       const assistantEntry: TranscriptEntry = {
         id: `a-${Date.now()}`,
         sender: 'assistant',
-        text: fallbackText,
+        text: spokenError,
         time: new Date().toLocaleTimeString([], {
           hour: '2-digit',
           minute: '2-digit',
@@ -457,7 +531,9 @@ export const App: React.FC = () => {
       };
 
       setTranscripts((prev) => [...prev, assistantEntry]);
-      speak(fallbackText, { lang });
+    } finally {
+      if (slowTimer) clearTimeout(slowTimer);
+      setIsSlowNetwork(false);
     }
   };
 
@@ -505,6 +581,32 @@ export const App: React.FC = () => {
 
   return (
     <div className="app-container">
+      <a href="#main-content" className="skip-link">
+        {lang === 'hi-IN' ? 'Mukhya vishay par jayein' : 'Skip to main content'}
+      </a>
+
+      {isOffline && (
+        <div className="offline-banner" role="alert" aria-live="assertive">
+          <span>📡</span>
+          <span>
+            {lang === 'hi-IN'
+              ? 'Aap offline hain — Internet connection nahi hai'
+              : 'You are offline — No internet connection'}
+          </span>
+        </div>
+      )}
+
+      {isSlowNetwork && (
+        <div className="slow-network-banner" role="alert" aria-live="polite">
+          <span>⏳</span>
+          <span>
+            {lang === 'hi-IN'
+              ? 'Network thoda dheema chal raha hai, kripya intezar karein...'
+              : 'Slow network detected, processing request...'}
+          </span>
+        </div>
+      )}
+
       <header className="app-header">
         <h1 className="app-title">Awaaz Pay</h1>
         <div className="header-controls">
@@ -677,7 +779,7 @@ export const App: React.FC = () => {
         </button>
       </div>
 
-      <main className="mic-hero-section">
+      <main id="main-content" className="mic-hero-section">
         {!sttSupported ? (
           <div className="unsupported-warning" role="alert">
             <p>

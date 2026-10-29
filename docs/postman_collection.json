@@ -1,0 +1,746 @@
+{
+	"info": {
+		"_postman_id": "awaaz-pay-api-collection",
+		"name": "Awaaz Pay API",
+		"description": "API collection for Awaaz Pay — voice-first inclusive payment platform.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3001",
+			"type": "default"
+		}
+	],
+	"item": [
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "health"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Register Options",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/register-options",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "register-options"]
+						}
+					}
+				},
+				{
+					"name": "Verify Registration",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\",\n  \"response\": {}\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/verify-registration",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "verify-registration"]
+						}
+					}
+				},
+				{
+					"name": "Login Options",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/login-options",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "login-options"]
+						}
+					}
+				},
+				{
+					"name": "Verify Login",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\",\n  \"response\": {}\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/verify-login",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "verify-login"]
+						}
+					}
+				},
+				{
+					"name": "Get Voice Challenge",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/voice-challenge",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "voice-challenge"]
+						}
+					}
+				},
+				{
+					"name": "Verify Voice Challenge",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"challengeId\": \"challenge_id_here\",\n  \"transcript\": \"phrase here\",\n  \"userId\": \"user_meena\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/voice-challenge/verify",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "voice-challenge", "verify"]
+						}
+					}
+				},
+				{
+					"name": "Get Current User",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/me",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "me"]
+						}
+					}
+				},
+				{
+					"name": "Logout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/logout",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "logout"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Conversation",
+			"item": [
+				{
+					"name": "Converse",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sessionId\": \"session-1\",\n  \"text\": \"Mera balance kitna hai\",\n  \"userId\": \"user_meena\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/converse",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "converse"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Payments",
+			"item": [
+				{
+					"name": "Prepare Payment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"transactionId\": \"tx_id\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/payments/prepare",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "payments", "prepare"]
+						}
+					}
+				},
+				{
+					"name": "Confirm Payment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"transactionId\": \"tx_id\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/payments/confirm",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "payments", "confirm"]
+						}
+					}
+				},
+				{
+					"name": "Get Payment by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/payments/:id",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "payments", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "tx_id"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Contacts & Onboarding",
+			"item": [
+				{
+					"name": "Get Contacts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/contacts?userId=user_meena",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "contacts"],
+							"query": [
+								{
+									"key": "userId",
+									"value": "user_meena"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Add Contact",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\",\n  \"alias\": \"didi\",\n  \"displayName\": \"Didi\",\n  \"paypalEmail\": \"didi@sandbox.com\",\n  \"addedBy\": \"guardian_ramesh\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/contacts",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "contacts"]
+						}
+					}
+				},
+				{
+					"name": "Activate Contact",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"guardianId\": \"guardian_ramesh\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/contacts/:id/activate",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "contacts", ":id", "activate"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "contact_id"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Block Contact",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"guardianId\": \"guardian_ramesh\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/contacts/:id/block",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "contacts", ":id", "block"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "contact_id"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Delete Contact",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/contacts/:id",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "contacts", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "contact_id"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Complete Onboarding",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\",\n  \"name\": \"Meena\",\n  \"language\": \"hi\",\n  \"limits\": {\n    \"daily_total\": 1000,\n    \"per_transaction_new_payee\": 500,\n    \"max_new_payees_per_day\": 2\n  },\n  \"guardian\": {\n    \"name\": \"Ramesh\",\n    \"contact\": \"+971501234567\",\n    \"permissions\": \"all\"\n  },\n  \"contacts\": [\n    {\n      \"alias\": \"bhaiya\",\n      \"displayName\": \"Bhaiya\",\n      \"paypalEmail\": \"bhaiya-sandbox@example.com\"\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/onboarding/complete",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "onboarding", "complete"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Approvals",
+			"item": [
+				{
+					"name": "Get Approval by Token",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/approvals/:token",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "approvals", ":token"],
+							"variable": [
+								{
+									"key": "token",
+									"value": "approval_token"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Decide Approval",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"decision\": \"approve\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/approvals/:token/decide",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "approvals", ":token", "decide"],
+							"variable": [
+								{
+									"key": "token",
+									"value": "approval_token"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Approval Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/approvals/status/:transactionId",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "approvals", "status", ":transactionId"],
+							"variable": [
+								{
+									"key": "transactionId",
+									"value": "tx_id"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Merchant & Invoicing",
+			"item": [
+				{
+					"name": "Create Invoice",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"merchantId\": \"merchant_ravi_cabs\",\n  \"amount\": 250,\n  \"currency\": \"INR\",\n  \"note\": \"Cab ride\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/merchant/invoice",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "merchant", "invoice"]
+						}
+					}
+				},
+				{
+					"name": "Get Invoice",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices/:idOrPaypalId",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices", ":idOrPaypalId"],
+							"variable": [
+								{
+									"key": "idOrPaypalId",
+									"value": "inv_demo_ravi_250"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Scan Invoice QR",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"qrData\": \"https://www.paypal.com/invoice/p/#INV2-DEMO-RAVI-250\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices/scan",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices", "scan"]
+						}
+					}
+				},
+				{
+					"name": "Pay Invoice",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"invoiceId\": \"inv_demo_ravi_250\",\n  \"userId\": \"user_meena\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices/pay",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices", "pay"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Family Dashboard & Receive",
+			"item": [
+				{
+					"name": "Get Family Dashboard",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/family/dashboard?userId=user_meena",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "family", "dashboard"],
+							"query": [
+								{
+									"key": "userId",
+									"value": "user_meena"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Fund Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\",\n  \"amount\": 500\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/family/fund-order",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "family", "fund-order"]
+						}
+					}
+				},
+				{
+					"name": "Capture Fund Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"orderId\": \"order_id_here\",\n  \"userId\": \"user_meena\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/family/capture",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "family", "capture"]
+						}
+					}
+				},
+				{
+					"name": "Set Emergency Limit",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"userId\": \"user_meena\",\n  \"guardianId\": \"guardian_ramesh\",\n  \"newLimit\": 2000,\n  \"reason\": \"Emergency\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/family/emergency-limit",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "family", "emergency-limit"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Notifications",
+			"item": [
+				{
+					"name": "Get Pending Notifications",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications/pending?userId=user_meena",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "notifications", "pending"],
+							"query": [
+								{
+									"key": "userId",
+									"value": "user_meena"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Mark Single Notification Delivered",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications/:id/delivered",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "notifications", ":id", "delivered"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "notif_1"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Mark Multiple Notifications Delivered",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"ids\": [\"notif_1\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications/mark-delivered",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "notifications", "mark-delivered"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Webhooks",
+			"item": [
+				{
+					"name": "PayPal Webhook",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhooks/paypal",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhooks", "paypal"]
+						}
+					}
+				}
+			]
+		}
+	]
+}
