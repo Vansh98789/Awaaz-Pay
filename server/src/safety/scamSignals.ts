@@ -8,18 +8,12 @@ import type {
   ScamRiskLevel,
 } from './types.js';
 
-// Construct regex pattern matching a phrase with boundary protection
 function buildPhraseRegex(phrase: string): RegExp {
   const normalized = normalizeText(phrase);
-  // Boundary check supporting both ASCII and Unicode word edges
   const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|\\s|[^\\p{L}\\p{N}])${escaped}($|\\s|[^\\p{L}\\p{N}])`, 'u');
 }
 
-/**
- * Pure rule-based scam signal detector analyzing user transcript for coercion,
- * urgency, threats, and fraudulent payment patterns.
- */
 export function detectScamSignals(text: string): ScamDetectionResult {
   const normalized = normalizeText(text);
   if (!normalized) {
@@ -53,7 +47,6 @@ export function detectScamSignals(text: string): ScamDetectionResult {
     }
   }
 
-  // Calculate score summing distinct matched category base weights
   let totalScore = 0;
   for (const def of SCAM_CATEGORIES) {
     if (matchedCategories.has(def.category)) {
@@ -61,7 +54,6 @@ export function detectScamSignals(text: string): ScamDetectionResult {
     }
   }
 
-  // Critical indicators (police threat, OTP request, secrecy, lottery) guarantee high score
   if (hasCriticalCategory && totalScore < 0.6) {
     totalScore = 0.6;
   }
@@ -75,22 +67,16 @@ export function detectScamSignals(text: string): ScamDetectionResult {
   };
 }
 
-/**
- * Combines lexical speech signals with contextual metadata (blocklists, amounts,
- * payee verification, and user interview responses) into an actionable risk level.
- */
 export function combineRisk(
   signals: ScamDetectionResult,
   contextFlags?: RiskContextFlags
 ): ScamRiskLevel {
   const flags = contextFlags ?? {};
 
-  // 1. Hard invariant: blocklisted payee is always high risk
   if (flags.payeeOnBlocklist) {
     return 'high';
   }
 
-  // 2. High severity: critical scam categories or strong composite score
   const hasCriticalCategory = signals.categories.some((cat) =>
     ['threat_authority', 'otp_kyc', 'secrecy', 'prize_lottery'].includes(cat)
   );
@@ -98,22 +84,17 @@ export function combineRisk(
     return 'high';
   }
 
-  // 3. User reported being instructed to pay by a caller
   if (flags.toldToPayBySomeone) {
-    // If accompanied by any scam words or an unverified payee, escalate to high
     if (signals.score > 0 || flags.unverifiedPayee || flags.unusuallyHighAmount) {
       return 'high';
     }
-    // Acknowledging third-party instruction alone warrants medium risk interview
     return 'medium';
   }
 
-  // 4. Moderate lexical signals (e.g. single urgency or fee claim)
   if (signals.score >= 0.25) {
     return 'medium';
   }
 
-  // 5. Environmental risk combinations
   if (flags.unverifiedPayee && flags.unusuallyHighAmount) {
     return 'medium';
   }

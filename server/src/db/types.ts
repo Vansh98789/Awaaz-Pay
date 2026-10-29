@@ -1,5 +1,3 @@
-// Data model types for Awaaz Pay SQLite database
-
 export interface UserLimits {
   daily_total: number;
   per_transaction_new_payee: number;
@@ -10,7 +8,7 @@ export interface User {
   id: string;
   name: string;
   language: string;
-  limits: string; // JSON string representing UserLimits
+  limits: string;
   created_at: string;
 }
 
@@ -39,7 +37,7 @@ export interface Merchant {
   id: string;
   name: string;
   paypal_email: string;
-  verified: number; // 0 or 1
+  verified: number;
 }
 
 export interface Invoice {
@@ -82,7 +80,7 @@ export interface Notification {
   kind: string;
   message: string;
   spoken_text: string;
-  delivered: number; // 0 or 1
+  delivered: number;
   created_at: string;
 }
 
@@ -90,7 +88,7 @@ export interface AuditEvent {
   id: string;
   user_id: string;
   kind: string;
-  payload: string; // JSON string
+  payload: string;
   created_at: string;
 }
 
@@ -103,7 +101,7 @@ export interface BlocklistItem {
 export interface LedgerEntry {
   id: string;
   user_id: string;
-  delta: number; // positive for credit (money in), negative for debit (money out)
+  delta: number;
   reason: string;
   ref: string | null;
   created_at: string;

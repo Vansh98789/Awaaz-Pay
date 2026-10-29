@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
-// Support loading root .env when running from monorepo or individual package
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
@@ -18,11 +17,13 @@ const envSchema = z.object({
   PAYPAL_API_BASE: z.string().url().default('https://api-m.sandbox.paypal.com'),
   PAYPAL_WEBHOOK_ID: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
+  GROQ_MODEL: z.string().optional(),
+  LLM_DEMO_CACHE: z.enum(['true', 'false']).default('false'),
   DATABASE_PATH: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
 
-// Crash immediately on invalid config to catch misconfiguration early
 export const config: AppConfig = envSchema.parse(process.env);

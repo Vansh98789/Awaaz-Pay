@@ -1,5 +1,3 @@
-// Type definitions for the deterministic payment rules engine
-
 export type PayeeType = 'trusted_contact' | 'new_merchant_verified' | 'new_personal';
 
 export type ScamRiskLevel = 'low' | 'medium' | 'high';

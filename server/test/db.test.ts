@@ -16,7 +16,6 @@ describe('Database Layer & Repository', () => {
   let db: Database.Database;
 
   beforeEach(() => {
-    // Fresh isolated in-memory database for each test case
     db = createDb(':memory:');
     runMigrations(db);
   });
@@ -56,7 +55,6 @@ describe('Database Layer & Repository', () => {
     expect(result.merchantId).toBe('merchant_ravi_cabs');
     expect(result.balance).toBe(0);
 
-    // Verify user record
     const user = getUserById(db, 'user_meena');
     expect(user).not.toBeNull();
     expect(user?.name).toBe('Meena');
@@ -64,7 +62,6 @@ describe('Database Layer & Repository', () => {
     const limits = JSON.parse(user!.limits);
     expect(limits.daily_total).toBe(1000);
 
-    // Verify guardian record
     const guardian = db
       .prepare<[string], { name: string; contact: string }>(
         'SELECT name, contact FROM guardians WHERE id = ?'
@@ -72,7 +69,6 @@ describe('Database Layer & Repository', () => {
       .get(result.guardianId);
     expect(guardian?.name).toBe('Ramesh');
 
-    // Verify contacts
     const contacts = listContacts(db, 'user_meena');
     expect(contacts.length).toBe(2);
     const aliases = contacts.map((c) => c.alias);
@@ -80,7 +76,6 @@ describe('Database Layer & Repository', () => {
     expect(aliases).toContain('sabzi_wala');
     expect(contacts.every((c) => c.status === 'active')).toBe(true);
 
-    // Verify merchant
     const merchant = db
       .prepare<[string], { name: string; verified: number }>(
         'SELECT name, verified FROM merchants WHERE id = ?'
@@ -89,7 +84,6 @@ describe('Database Layer & Repository', () => {
     expect(merchant?.name).toBe('Ravi Cabs');
     expect(merchant?.verified).toBe(1);
 
-    // Verify starting balance
     expect(getBalance(db, 'user_meena')).toBe(0);
   });
 
@@ -101,7 +95,6 @@ describe('Database Layer & Repository', () => {
     seedDemoData(db);
     expect(getBalance(db, 'user_meena')).toBe(0);
 
-    // Credit ₹500 (e.g. family funds wallet)
     addLedgerEntry(db, {
       user_id: 'user_meena',
       delta: 500,
@@ -110,7 +103,6 @@ describe('Database Layer & Repository', () => {
     });
     expect(getBalance(db, 'user_meena')).toBe(500);
 
-    // Debit ₹250 (e.g. paid cab)
     addLedgerEntry(db, {
       user_id: 'user_meena',
       delta: -250,
@@ -119,7 +111,6 @@ describe('Database Layer & Repository', () => {
     });
     expect(getBalance(db, 'user_meena')).toBe(250);
 
-    // Debit another ₹200
     addLedgerEntry(db, {
       user_id: 'user_meena',
       delta: -200,
@@ -149,7 +140,6 @@ describe('Database Layer & Repository', () => {
     expect(tx.id).toBeDefined();
     expect(tx.amount).toBe(250);
 
-    // Query back from DB
     const stored = db
       .prepare<[string], { amount: number; decision: string; paypal_ref: string }>(
         'SELECT amount, decision, paypal_ref FROM transactions WHERE id = ?'

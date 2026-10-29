@@ -1,8 +1,6 @@
 import type Database from 'better-sqlite3';
 
-// Schema migration creating all 11 core tables idempotently
 export function runMigrations(db: Database.Database): void {
-  // Execute table definitions in order of foreign key relationships
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,

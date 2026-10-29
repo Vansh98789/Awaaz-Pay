@@ -10,13 +10,11 @@ import type {
   User,
 } from './types.js';
 
-// Retrieve user by primary identifier
 export function getUserById(db: Database.Database, id: string): User | null {
   const stmt = db.prepare<[string], User>('SELECT * FROM users WHERE id = ?');
   return stmt.get(id) ?? null;
 }
 
-// Retrieve active or cooling-off contacts for a specific user
 export function listContacts(db: Database.Database, userId: string): Contact[] {
   const stmt = db.prepare<[string], Contact>(
     'SELECT * FROM contacts WHERE user_id = ? ORDER BY alias ASC'
@@ -24,7 +22,6 @@ export function listContacts(db: Database.Database, userId: string): Contact[] {
   return stmt.all(userId);
 }
 
-// Calculate the current wallet balance by summing all ledger entry deltas
 export function getBalance(db: Database.Database, userId: string): number {
   const stmt = db.prepare<[string], { balance: number }>(
     'SELECT COALESCE(SUM(delta), 0) AS balance FROM wallet_ledger WHERE user_id = ?'
@@ -33,7 +30,6 @@ export function getBalance(db: Database.Database, userId: string): number {
   return result?.balance ?? 0;
 }
 
-// Add an immutable ledger credit or debit entry
 export function addLedgerEntry(
   db: Database.Database,
   entry: Omit<LedgerEntry, 'id' | 'created_at'> & { id?: string; created_at?: string }
@@ -61,7 +57,6 @@ export function addLedgerEntry(
   return record;
 }
 
-// Log a payment or transfer attempt with its risk assessment
 export function recordTransaction(
   db: Database.Database,
   tx: Omit<Transaction, 'id' | 'created_at'> & { id?: string; created_at?: string }
@@ -108,7 +103,6 @@ export function recordTransaction(
   return record;
 }
 
-// Append an audit event for non-repudiation and safety analysis
 export function writeAudit(
   db: Database.Database,
   event: Omit<AuditEvent, 'id' | 'created_at'> & { id?: string; created_at?: string }
@@ -134,7 +128,6 @@ export function writeAudit(
   return record;
 }
 
-// Insert or replace user record
 export function upsertUser(db: Database.Database, user: User): User {
   const stmt = db.prepare(`
     INSERT INTO users (id, name, language, limits, created_at)
@@ -148,7 +141,6 @@ export function upsertUser(db: Database.Database, user: User): User {
   return user;
 }
 
-// Insert or replace guardian record
 export function upsertGuardian(db: Database.Database, guardian: Guardian): Guardian {
   const stmt = db.prepare(`
     INSERT INTO guardians (id, user_id, name, contact, permissions)
@@ -168,7 +160,6 @@ export function upsertGuardian(db: Database.Database, guardian: Guardian): Guard
   return guardian;
 }
 
-// Insert or replace contact record
 export function upsertContact(db: Database.Database, contact: Contact): Contact {
   const stmt = db.prepare(`
     INSERT INTO contacts (id, user_id, alias, display_name, paypal_email, status, added_by, activated_at)
@@ -193,7 +184,6 @@ export function upsertContact(db: Database.Database, contact: Contact): Contact 
   return contact;
 }
 
-// Insert or replace merchant record
 export function upsertMerchant(db: Database.Database, merchant: Merchant): Merchant {
   const stmt = db.prepare(`
     INSERT INTO merchants (id, name, paypal_email, verified)

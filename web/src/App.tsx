@@ -1,6 +1,5 @@
 import React from 'react';
 
-// Root application component structured for screen-reader readability and high contrast
 export const App: React.FC = () => {
   return (
     <main

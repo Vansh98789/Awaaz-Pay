@@ -10,7 +10,6 @@ describe('Server Endpoints', () => {
     expect(response.body.status).toBe('ok');
     expect(typeof response.body.time).toBe('string');
 
-    // Ensure the returned time string is a valid ISO timestamp
     const parsedDate = new Date(response.body.time);
     expect(Number.isNaN(parsedDate.getTime())).toBe(false);
   });

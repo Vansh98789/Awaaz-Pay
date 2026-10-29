@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 
-// Ensure root element exists before mounting
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error('Failed to find the root element');

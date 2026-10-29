@@ -13,14 +13,12 @@ export interface HealthResponse {
   time: string;
 }
 
-// Separate app definition from listener to facilitate testing with supertest
 export function createApp(): Express {
   const app = express();
 
   app.use(cors());
   app.use(express.json());
 
-  // Probes use this endpoint to verify server availability and clock state
   app.get('/api/health', (_req: Request, res: Response<HealthResponse>) => {
     res.status(200).json({
       status: 'ok',
@@ -28,11 +26,9 @@ export function createApp(): Express {
     });
   });
 
-  // Serve the built frontend on the same origin when web/dist exists (production mode)
   if (fs.existsSync(webDistPath)) {
     app.use(express.static(webDistPath));
 
-    // Handle client-side routing fallback while preserving 404s for unknown API routes
     app.get('*', (req: Request, res: Response) => {
       if (req.path.startsWith('/api')) {
         res.status(404).json({ error: 'Endpoint not found' });

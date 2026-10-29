@@ -1,16 +1,11 @@
 import type { CategoryDefinition } from './types.js';
 
-/**
- * Curated dictionary of scam phrases across English, Devanagari Hindi, and Roman Hinglish.
- * Easily editable by adding or removing keywords in each category.
- */
 export const SCAM_CATEGORIES: CategoryDefinition[] = [
   {
     category: 'urgency',
     baseWeight: 0.25,
     isCritical: false,
     phrases: [
-      // English
       'immediately',
       'right now',
       'urgent',
@@ -20,14 +15,12 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'time is running out',
       'act fast',
       'before it expires',
-      // Devanagari Hindi
       'तुरंत',
       'जल्दी',
       'अभी',
       'तुरंत करो',
       'समय खत्म',
       'फ़ौरन',
-      // Hinglish
       'jaldi',
       'abhi',
       'turant',
@@ -43,7 +36,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     baseWeight: 0.6,
     isCritical: true,
     phrases: [
-      // English
       'police',
       'arrest',
       'court',
@@ -54,7 +46,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'crime branch',
       'cyber crime',
       'law enforcement',
-      // Devanagari Hindi
       'पुलिस',
       'गिरफ़्तार',
       'कोर्ट',
@@ -63,7 +54,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'पुलिस आ जाएगी',
       'वारंट',
       'केस दर्ज',
-      // Hinglish
       'police aa jayegi',
       'arrest ho jaoge',
       'jail bhejenge',
@@ -80,7 +70,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     baseWeight: 0.6,
     isCritical: true,
     phrases: [
-      // English
       'do not tell anyone',
       'keep it secret',
       'confidential',
@@ -88,13 +77,11 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'stay on the line',
       'dont tell your family',
       "don't tell anyone",
-      // Devanagari Hindi
       'किसी को मत बताना',
       'गुप्त रखो',
       'घर पर मत बताओ',
       'कॉल मत काटना',
       'फ़ोन मत काटना',
-      // Hinglish
       'kisi ko mat batana',
       'kisi ko mat batao',
       'ghar pe mat batana',
@@ -110,7 +97,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     baseWeight: 0.5,
     isCritical: true,
     phrases: [
-      // English
       'lottery',
       'won a prize',
       'cash prize',
@@ -119,14 +105,12 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'congratulations you won',
       'claim reward',
       'kbc lottery',
-      // Devanagari Hindi
       'लॉटरी',
       'इनाम',
       'लकी ड्रा',
       'जैकपॉट',
       'इनाम जीता',
       'लॉटरी लगी है',
-      // Hinglish
       'lottery lagi hai',
       'inaam mila hai',
       'lucky draw',
@@ -142,7 +126,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     baseWeight: 0.6,
     isCritical: true,
     phrases: [
-      // English
       'otp',
       'pin',
       'kyc update',
@@ -152,14 +135,12 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'share your pin',
       'pan card update',
       'bank verification',
-      // Devanagari Hindi
       'ओटीपी',
       'पिन',
       'बैंक ब्लॉक',
       'खाता बंद',
       'केवाईसी',
       'ओटीपी बताओ',
-      // Hinglish
       'otp batao',
       'otp share karo',
       'pin batao',
@@ -177,7 +158,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     baseWeight: 0.4,
     isCritical: false,
     phrases: [
-      // English
       'calling from rbi',
       'calling from paypal',
       'bank manager',
@@ -185,13 +165,11 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'telecom department',
       'your son is in trouble',
       'relative in hospital',
-      // Devanagari Hindi
       'बैंक से बोल रहा हूँ',
       'बिजली विभाग',
       'बेटा मुसीबत में है',
       'अस्पताल में भर्ती',
       'आरबीआई',
-      // Hinglish
       'rbi se bol raha hu',
       'bank se call hai',
       'bijli vibhag',
@@ -206,7 +184,6 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     baseWeight: 0.35,
     isCritical: false,
     phrases: [
-      // English
       'processing fee',
       'refund',
       'customs fee',
@@ -214,12 +191,10 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
       'clearance charge',
       'pay fee to receive',
       'tax to claim',
-      // Devanagari Hindi
       'प्रोसेसिंग फ़ीस',
       'रिफंड',
       'कस्टम फ़ीस',
       'टैक्स भरो पैसे लेने के लिए',
-      // Hinglish
       'processing fee',
       'refund milega',
       'customs fee',
@@ -234,19 +209,16 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     baseWeight: 0.35,
     isCritical: false,
     phrases: [
-      // English
       'pay now or',
       'transfer right now',
       'send money immediately',
       'pay before call ends',
       'otherwise account deleted',
       'pay immediately',
-      // Devanagari Hindi
       'अभी पैसे भेजो',
       'तुरंत ट्रांसफर करो',
       'नहीं तो खाता बंद',
       'अभी पेमेंट करो',
-      // Hinglish
       'abhi paise bhejo',
       'turant transfer karo',
       'abhi payment karo',

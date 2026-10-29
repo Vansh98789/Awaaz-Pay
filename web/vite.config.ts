@@ -2,7 +2,6 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-// Proxy /api requests to Express server during local development
 export default defineConfig({
   plugins: [
     react(),
