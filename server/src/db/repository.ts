@@ -196,3 +196,66 @@ export function upsertMerchant(db: Database.Database, merchant: Merchant): Merch
   stmt.run(merchant.id, merchant.name, merchant.paypal_email, merchant.verified);
   return merchant;
 }
+
+export function hasLedgerRef(db: Database.Database, ref: string): boolean {
+  const stmt = db.prepare<[string], { count: number }>(
+    'SELECT COUNT(*) AS count FROM wallet_ledger WHERE ref = ?'
+  );
+  return (stmt.get(ref)?.count ?? 0) > 0;
+}
+
+export function createNotification(
+  db: Database.Database,
+  notification: Omit<import('./types.js').Notification, 'id' | 'created_at' | 'delivered'> & {
+    id?: string;
+    delivered?: number;
+    created_at?: string;
+  }
+): import('./types.js').Notification {
+  const record: import('./types.js').Notification = {
+    id: notification.id || crypto.randomUUID(),
+    user_id: notification.user_id,
+    kind: notification.kind,
+    message: notification.message,
+    spoken_text: notification.spoken_text,
+    delivered: notification.delivered ?? 0,
+    created_at: notification.created_at || new Date().toISOString(),
+  };
+
+  const stmt = db.prepare(`
+    INSERT INTO notifications (id, user_id, kind, message, spoken_text, delivered, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    record.id,
+    record.user_id,
+    record.kind,
+    record.message,
+    record.spoken_text,
+    record.delivered,
+    record.created_at
+  );
+  return record;
+}
+
+export function getPendingNotifications(
+  db: Database.Database,
+  userId: string
+): import('./types.js').Notification[] {
+  const stmt = db.prepare<[string], import('./types.js').Notification>(
+    'SELECT * FROM notifications WHERE user_id = ? AND delivered = 0 ORDER BY created_at ASC'
+  );
+  return stmt.all(userId);
+}
+
+export function markNotificationDelivered(db: Database.Database, id: string): void {
+  const stmt = db.prepare('UPDATE notifications SET delivered = 1 WHERE id = ?');
+  stmt.run(id);
+}
+
+export function markNotificationsDelivered(db: Database.Database, ids: string[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(', ');
+  const stmt = db.prepare(`UPDATE notifications SET delivered = 1 WHERE id IN (${placeholders})`);
+  stmt.run(...ids);
+}

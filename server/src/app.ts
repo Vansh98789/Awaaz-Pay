@@ -3,6 +3,11 @@ import express, { type Express, type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type Database from 'better-sqlite3';
+import { getDb } from './db/connection.js';
+import { createFamilyRouter } from './routes/family.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
+import { createNotificationsRouter } from './routes/notifications.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,8 +18,9 @@ export interface HealthResponse {
   time: string;
 }
 
-export function createApp(): Express {
+export function createApp(db?: Database.Database): Express {
   const app = express();
+  const database = db ?? getDb();
 
   app.use(cors());
   app.use(express.json());
@@ -25,6 +31,10 @@ export function createApp(): Express {
       time: new Date().toISOString(),
     });
   });
+
+  app.use('/api/family', createFamilyRouter(database));
+  app.use('/api/webhooks', createWebhooksRouter(database));
+  app.use('/api/notifications', createNotificationsRouter(database));
 
   if (fs.existsSync(webDistPath)) {
     app.use(express.static(webDistPath));
