@@ -5,6 +5,7 @@ import { useSpeechSynthesis } from './hooks/useSpeechSynthesis';
 import { GuardianApprovePage } from './pages/GuardianApprovePage';
 import { OnboardingWizard } from './pages/OnboardingWizard';
 import { MerchantDemoPage } from './pages/MerchantDemoPage';
+import { FamilyDashboardPage } from './pages/FamilyDashboardPage';
 import { QRScannerModal } from './components/QRScannerModal';
 
 interface TranscriptEntry {
@@ -28,7 +29,7 @@ interface VoiceChallengeState {
 
 export const App: React.FC = () => {
   const [currentRoute, setCurrentRoute] = useState<{
-    path: 'wallet' | 'approve' | 'onboarding' | 'merchant';
+    path: 'wallet' | 'approve' | 'onboarding' | 'merchant' | 'family';
     token?: string;
   }>(() => {
     const path = typeof window !== 'undefined' ? window.location.pathname : '/';
@@ -44,6 +45,9 @@ export const App: React.FC = () => {
     }
     if (path === '/merchant' || hash === '#/merchant' || hash === '#merchant') {
       return { path: 'merchant' };
+    }
+    if (path === '/family' || hash === '#/family' || hash === '#family') {
+      return { path: 'family' };
     }
     return { path: 'wallet' };
   });
@@ -68,6 +72,8 @@ export const App: React.FC = () => {
         setCurrentRoute({ path: 'onboarding' });
       } else if (path === '/merchant' || hash === '#/merchant' || hash === '#merchant') {
         setCurrentRoute({ path: 'merchant' });
+      } else if (path === '/family' || hash === '#/family' || hash === '#family') {
+        setCurrentRoute({ path: 'family' });
       } else {
         setCurrentRoute({ path: 'wallet' });
       }
@@ -488,6 +494,10 @@ export const App: React.FC = () => {
     return <MerchantDemoPage />;
   }
 
+  if (currentRoute.path === 'family') {
+    return <FamilyDashboardPage />;
+  }
+
   const handleScanSuccess = (qrData: string) => {
     setIsScannerOpen(false);
     handleSpeechResult(qrData);
@@ -498,6 +508,14 @@ export const App: React.FC = () => {
       <header className="app-header">
         <h1 className="app-title">Awaaz Pay</h1>
         <div className="header-controls">
+          <a
+            href="/family"
+            className="action-pill-btn"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+            aria-label="Open family activity dashboard"
+          >
+            🛡️ Family
+          </a>
           <a
             href="/merchant"
             className="action-pill-btn"

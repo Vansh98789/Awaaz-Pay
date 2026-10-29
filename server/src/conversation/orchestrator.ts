@@ -19,6 +19,11 @@ import { evaluatePayment } from '../rules/engine.js';
 import { detectScamSignals, combineRisk } from '../safety/scamSignals.js';
 import { templates } from './templates.js';
 import {
+  getSevenDaySummary,
+  explainRecentPayment,
+  getLastSenderAmount,
+} from './historyHelper.js';
+import {
   getSession,
   updateSession,
   resetSession,
@@ -512,7 +517,35 @@ export async function processConversation(
     } else {
       const intentResult = await parseIntent(text, contactAliases, 'idle');
 
-    if (intentResult.intent === 'repeat') {
+    // Check specific contact funding follow-up question (e.g. "Ramesh ne last time kitna bheja?")
+    const hindiSenderMatch = text.match(/([a-zA-Z\u0900-\u097F]+)\s+ne\s+(?:last\s*time|aakhri\s*baar|kitna)?\s*(?:kitna)?\s*bheja/i);
+    const engSenderMatch = text.match(/how\s*much\s*did\s*([a-zA-Z]+)\s*send/i);
+    const senderName = hindiSenderMatch?.[1] || engSenderMatch?.[1];
+
+    if (senderName && !['kisi', 'kisko', 'sab'].includes(senderName.toLowerCase())) {
+      const res = getLastSenderAmount(db, userId, senderName);
+      replyText = res.spokenText[lang];
+    } else if (/\b(agla|next|aage)\b/i.test(text) && session.lastHistoryList && session.lastHistoryList.length > 0) {
+      const list = session.lastHistoryList;
+      const idx = session.historyIndex || 0;
+      if (idx < list.length) {
+        const item = list[idx];
+        replyText =
+          lang === 'hi'
+            ? `Agla transaction: ${item.payee} ko ₹${item.amount}.`
+            : `Next transaction: ₹${item.amount} to ${item.payee}.`;
+        updateSession(sessionId, { historyIndex: idx + 1 });
+      } else {
+        replyText =
+          lang === 'hi'
+            ? 'Aur koi agla payment nahi hai.'
+            : 'There are no more transactions.';
+      }
+    } else if (/\b(ruko|ruk|stop|bas)\b/i.test(text) && intentResult.intent !== 'send_money') {
+      replyText =
+        lang === 'hi' ? 'Theek hai, main ruk gayi.' : 'Okay, stopped.';
+      updateSession(sessionId, { historyIndex: 0 });
+    } else if (intentResult.intent === 'repeat') {
       replyText = session.lastReply
         ? session.lastReply.text
         : templates[lang].no_prior_reply;
@@ -522,6 +555,16 @@ export async function processConversation(
     } else if (intentResult.intent === 'check_balance') {
       const balance = getBalance(db, userId);
       replyText = templates[lang].check_balance(balance);
+    } else if (intentResult.intent === 'read_history') {
+      const summary = getSevenDaySummary(db, userId);
+      updateSession(sessionId, {
+        lastHistoryList: summary.transactions,
+        historyIndex: 0,
+      });
+      replyText = summary.spokenText[lang];
+    } else if (intentResult.intent === 'explain_payment') {
+      const exp = explainRecentPayment(db, userId);
+      replyText = exp.spokenText[lang];
     } else if (intentResult.intent === 'send_money') {
       if (!intentResult.amount) {
         replyText = templates[lang].clarify_amount;

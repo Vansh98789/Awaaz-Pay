@@ -9,7 +9,7 @@ export interface SessionData {
   sessionId: string;
   userId: string;
   state: ConversationState;
-  lang: 'hi' | 'en';
+  lang?: 'hi' | 'en';
   currentTransactionId?: string;
   pendingPayeeName?: string;
   pendingAmount?: number;
@@ -28,6 +28,10 @@ export interface SessionData {
   // Task 16 invoice fields
   isInvoicePayment?: boolean;
   invoiceId?: string;
+
+  // Task 17 history context fields
+  lastHistoryList?: Array<{ id: string; payee: string; amount: number; time: string }>;
+  historyIndex?: number;
 }
 
 const sessionStore = new Map<string, SessionData>();
@@ -39,7 +43,6 @@ export function getSession(sessionId: string, userId = 'user_meena'): SessionDat
       sessionId,
       userId,
       state: 'idle',
-      lang: 'hi',
       unclearAttempts: 0,
       updatedAt: Date.now(),
     };

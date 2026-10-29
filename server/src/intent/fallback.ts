@@ -3,12 +3,12 @@ import type { IntentResult, ConversationState } from './types.js';
 const YES = /\b(haan|ha|ji|theek\s*hai|kar\s*do|bilkul|yes|ok|okay|sure)\b/i;
 const NO = /\b(nahi|nahin|na|mat\s*karo|ruko|cancel|band\s*karo|no|nope|stop)\b/i;
 const BALANCE = /\b(balance|paisa|kitna|bacha|wallet|account|funds?)\b/i;
-const HISTORY = /\b(history|transactions?|kya\s*hua|dikhao|recent|last|hafte|mahine)\b/i;
-const REPEAT = /\b(dobara|phir|again|repeat|wapas)\b/i;
+const HISTORY = /\b(history|transactions?|kya\s*hua|dikhao|recent|last|hafte|mahine|week|happened|past|pichle)\b/i;
+const REPEAT = /\b(dobara|phir|again|repeat|wapas|dohrao)\b/i;
 const CANCEL = /\b(cancel|band\s*karo|rok|stop|chhodh?o)\b/i;
 const SCAM = /(?<!@[\w.-]*)\b(thaga|scam(med)?|fraud|dhoka|cheated?)\b(?!@[\w.-]*)/i;
 const HELPER = /\b(helper|sahayak|guardian|add\s*karo)\b/i;
-const EXPLAIN = /\bexplain\b|\b(kyun|kyon|why|kaise)\b.{0,40}\b(payment|transaction|kata|kati|gaya)\b|\b(payment|transaction)\b.{0,40}\b(kyun|kyon|why|kata|kati)\b/i;
+const EXPLAIN = /\b(explain|samjhao|kyun|kyon|why|kaise|kisko|kitna\s*kata)\b|\b(kyun|kyon|why|kaise)\b.{0,40}\b(payment|transaction|kata|kati|gaya)\b|\b(payment|transaction)\b.{0,40}\b(kyun|kyon|why|kata|kati)\b/i;
 
 const HINDI_ONES: Record<string, number> = {
   ek: 1, do: 2, teen: 3, chaar: 4, char: 4, paanch: 5, panch: 5,

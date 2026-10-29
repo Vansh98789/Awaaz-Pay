@@ -863,7 +863,17 @@ body {
   line-height: 1.4;
 }
 
-.auth-secondary-btn.enrolled {
-  border-color: var(--accent-green) !important;
-  color: #86efac !important;
+/* AG Grid Family Dashboard Row Highlights */
+.blocked-row {
+  background-color: rgba(239, 68, 68, 0.25) !important;
+  color: #fca5a5 !important;
+}
+
+.pending-row {
+  background-color: rgba(245, 158, 11, 0.22) !important;
+  color: #fde68a !important;
+}
+
+.flagged-row {
+  border-left: 4px solid var(--accent-red) !important;
 }
