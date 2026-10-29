@@ -32,6 +32,7 @@ describe('Payment Pipeline (Task 10)', () => {
   let testApp: ReturnType<typeof createApp>;
 
   beforeEach(() => {
+    process.env.DEMO_AUTH_BYPASS = 'true';
     vi.clearAllMocks();
     db = createDb(':memory:');
     seedDemoData(db);

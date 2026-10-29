@@ -106,3 +106,14 @@ export interface LedgerEntry {
   ref: string | null;
   created_at: string;
 }
+
+export interface Passkey {
+  id: string;
+  user_id: string;
+  public_key: string;
+  counter: number;
+  device_type: string;
+  backed_up: number;
+  transports: string | null;
+  created_at: string;
+}

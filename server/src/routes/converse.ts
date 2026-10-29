@@ -2,13 +2,15 @@ import { Router, type Request, type Response } from 'express';
 import type Database from 'better-sqlite3';
 import crypto from 'node:crypto';
 import { processConversation } from '../conversation/orchestrator.js';
+import { requireAuth } from '../auth/middleware.js';
 
 export function createConverseRouter(db: Database.Database): Router {
   const router = Router();
 
-  router.post('/converse', async (req: Request, res: Response) => {
+  router.post('/converse', requireAuth, async (req: Request, res: Response) => {
     try {
-      const { text, sessionId = crypto.randomUUID(), userId = 'user_meena' } = req.body;
+      const userId = req.user?.id || req.body?.userId || 'user_meena';
+      const { text, sessionId = crypto.randomUUID() } = req.body;
 
       if (!text || typeof text !== 'string') {
         res.status(400).json({ error: 'Text input is required' });

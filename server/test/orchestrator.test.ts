@@ -48,6 +48,7 @@ describe('Conversation Orchestrator (Task 12)', () => {
   let testApp: ReturnType<typeof createApp>;
 
   beforeEach(() => {
+    process.env.DEMO_AUTH_BYPASS = 'true';
     vi.clearAllMocks();
     clearAllSessions();
     db = createDb(':memory:');

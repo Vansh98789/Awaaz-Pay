@@ -285,3 +285,58 @@ export function markNotificationsDelivered(db: Database.Database, ids: string[])
   const stmt = db.prepare(`UPDATE notifications SET delivered = 1 WHERE id IN (${placeholders})`);
   stmt.run(...ids);
 }
+
+export function savePasskey(
+  db: Database.Database,
+  passkey: import('./types.js').Passkey
+): import('./types.js').Passkey {
+  const stmt = db.prepare(`
+    INSERT INTO passkeys (id, user_id, public_key, counter, device_type, backed_up, transports, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      counter = excluded.counter,
+      device_type = excluded.device_type,
+      backed_up = excluded.backed_up,
+      transports = excluded.transports
+  `);
+  stmt.run(
+    passkey.id,
+    passkey.user_id,
+    passkey.public_key,
+    passkey.counter,
+    passkey.device_type,
+    passkey.backed_up,
+    passkey.transports,
+    passkey.created_at
+  );
+  return passkey;
+}
+
+export function getPasskeysByUserId(
+  db: Database.Database,
+  userId: string
+): import('./types.js').Passkey[] {
+  const stmt = db.prepare<[string], import('./types.js').Passkey>(
+    'SELECT * FROM passkeys WHERE user_id = ? ORDER BY created_at DESC'
+  );
+  return stmt.all(userId);
+}
+
+export function getPasskeyById(
+  db: Database.Database,
+  id: string
+): import('./types.js').Passkey | null {
+  const stmt = db.prepare<[string], import('./types.js').Passkey>(
+    'SELECT * FROM passkeys WHERE id = ?'
+  );
+  return stmt.get(id) ?? null;
+}
+
+export function updatePasskeyCounter(
+  db: Database.Database,
+  id: string,
+  counter: number
+): void {
+  const stmt = db.prepare('UPDATE passkeys SET counter = ? WHERE id = ?');
+  stmt.run(counter, id);
+}

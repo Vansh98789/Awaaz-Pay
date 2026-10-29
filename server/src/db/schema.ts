@@ -112,6 +112,19 @@ export function runMigrations(db: Database.Database): void {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS passkeys (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      public_key TEXT NOT NULL,
+      counter INTEGER NOT NULL DEFAULT 0,
+      device_type TEXT DEFAULT 'singleDevice',
+      backed_up INTEGER DEFAULT 0,
+      transports TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);
     CREATE INDEX IF NOT EXISTS idx_contacts_user_alias ON contacts(user_id, alias);
     CREATE INDEX IF NOT EXISTS idx_ledger_user ON wallet_ledger(user_id);
     CREATE INDEX IF NOT EXISTS idx_tx_user ON transactions(user_id);

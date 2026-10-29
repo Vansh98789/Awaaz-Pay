@@ -1,4 +1,5 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from './hooks/useSpeechSynthesis';
 
@@ -9,8 +10,25 @@ interface TranscriptEntry {
   time: string;
 }
 
+interface VoiceChallengeState {
+  isOpen: boolean;
+  challengeId?: string;
+  phrase?: string;
+  instruction?: string;
+  result?: {
+    passed: boolean;
+    score: number;
+    message: string;
+  };
+}
+
 export const App: React.FC = () => {
   const [lang, setLang] = useState<'hi-IN' | 'en-IN'>('hi-IN');
+  const [authState, setAuthState] = useState<'checking' | 'unauthenticated' | 'authenticated'>('checking');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
+  const [voiceChallenge, setVoiceChallenge] = useState<VoiceChallengeState>({ isOpen: false });
+
   const sessionIdRef = useRef<string>(
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
@@ -35,6 +53,176 @@ export const App: React.FC = () => {
       defaultSpeed: 1.0,
     });
 
+  // Check auth status on mount
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/auth/me', { credentials: 'include' });
+        if (res.ok) {
+          setAuthState('authenticated');
+        } else {
+          setAuthState('unauthenticated');
+        }
+      } catch {
+        setAuthState('unauthenticated');
+      }
+    }
+    checkAuth();
+  }, []);
+
+  // Passkey Login Flow
+  const handlePasskeyLogin = async () => {
+    try {
+      setIsPasskeyLoading(true);
+      setAuthError(null);
+
+      // Spoken guidance
+      const guidance =
+        lang === 'hi-IN'
+          ? 'Apni ungli sensor par rakhein.'
+          : 'Please place your finger on the sensor.';
+      speak(guidance, { lang });
+
+      const optRes = await fetch('/api/auth/login-options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'user_meena' }),
+        credentials: 'include',
+      });
+
+      if (!optRes.ok) {
+        throw new Error('Failed to fetch login options');
+      }
+
+      const options = await optRes.json();
+      const authResp = await startAuthentication({ optionsJSON: options });
+
+      const verifyRes = await fetch('/api/auth/verify-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'user_meena', response: authResp }),
+        credentials: 'include',
+      });
+
+      if (!verifyRes.ok) {
+        throw new Error('Verification failed');
+      }
+
+      const verifyData = await verifyRes.json();
+      if (verifyData.verified) {
+        setAuthState('authenticated');
+        const successMsg =
+          lang === 'hi-IN'
+            ? 'Login safal raha! Boliye, main sun rahi hoon.'
+            : 'Login successful! Speak, I am listening.';
+        speak(successMsg, { lang });
+      }
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      setAuthError(errMsg);
+      const spokenErr =
+        lang === 'hi-IN'
+          ? 'Login nahi ho paya. Dobara koshish karein.'
+          : 'Fingerprint login failed. Please try again.';
+      speak(spokenErr, { lang });
+    } finally {
+      setIsPasskeyLoading(false);
+    }
+  };
+
+  // Passkey Registration Flow
+  const handlePasskeyRegister = async () => {
+    try {
+      setIsPasskeyLoading(true);
+      setAuthError(null);
+
+      const guidance =
+        lang === 'hi-IN'
+          ? 'Naya fingerprint jodne ke liye ungli sensor par rakhein.'
+          : 'Place your finger on the sensor to register passkey.';
+      speak(guidance, { lang });
+
+      const optRes = await fetch('/api/auth/register-options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'user_meena' }),
+        credentials: 'include',
+      });
+
+      if (!optRes.ok) {
+        throw new Error('Failed to fetch registration options');
+      }
+
+      const options = await optRes.json();
+      const regResp = await startRegistration({ optionsJSON: options });
+
+      const verifyRes = await fetch('/api/auth/verify-registration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'user_meena', response: regResp }),
+        credentials: 'include',
+      });
+
+      if (!verifyRes.ok) {
+        throw new Error('Registration verification failed');
+      }
+
+      const verifyData = await verifyRes.json();
+      if (verifyData.verified) {
+        setAuthState('authenticated');
+        const successMsg =
+          lang === 'hi-IN'
+            ? 'Fingerprint safal register ho gaya! Ab aap login hain.'
+            : 'Passkey registered successfully! You are now logged in.';
+        speak(successMsg, { lang });
+      }
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      setAuthError(errMsg);
+      const spokenErr =
+        lang === 'hi-IN'
+          ? 'Fingerprint register nahi ho saka.'
+          : 'Failed to register fingerprint.';
+      speak(spokenErr, { lang });
+    } finally {
+      setIsPasskeyLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      setAuthState('unauthenticated');
+      const logoutMsg =
+        lang === 'hi-IN' ? 'Aap logout ho gaye hain.' : 'You have been logged out.';
+      speak(logoutMsg, { lang });
+    } catch {
+      setAuthState('unauthenticated');
+    }
+  };
+
+  // Voice Challenge Flow
+  const startVoiceChallenge = async () => {
+    try {
+      const res = await fetch('/api/auth/voice-challenge');
+      const data = await res.json();
+      setVoiceChallenge({
+        isOpen: true,
+        challengeId: data.id,
+        phrase: data.phrase,
+        instruction: data.instructionHindi,
+      });
+
+      const promptMsg =
+        lang === 'hi-IN'
+          ? `Voice challenge ke liye, kripya yeh dohraiye: "${data.phrase}"`
+          : `For voice challenge, please say: "${data.phrase}"`;
+      speak(promptMsg, { lang });
+    } catch {
+      // Ignored
+    }
+  };
+
   const handleSpeechResult = async (text: string) => {
     const nowTime = new Date().toLocaleTimeString([], {
       hour: '2-digit',
@@ -50,16 +238,61 @@ export const App: React.FC = () => {
 
     setTranscripts((prev) => [...prev, userEntry]);
 
+    // If active voice challenge is running, verify it
+    if (voiceChallenge.isOpen && voiceChallenge.challengeId) {
+      try {
+        const verifyRes = await fetch('/api/auth/voice-challenge/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challengeId: voiceChallenge.challengeId,
+            transcript: text,
+            userId: 'user_meena',
+          }),
+        });
+        const vResult = await verifyRes.json();
+        setVoiceChallenge((prev) => ({
+          ...prev,
+          result: {
+            passed: vResult.passed,
+            score: Math.round(vResult.score * 100),
+            message: vResult.passed
+              ? 'Voice match successful! (Secondary risk signal)'
+              : 'Voice did not match phrase (recorded as risk signal only).',
+          },
+        }));
+
+        const resultSpoken = vResult.passed
+          ? 'Awaaz match ho gayi.'
+          : 'Awaaz puri tarah match nahi hui, secondary risk ke roop mein record kiya gaya.';
+        speak(resultSpoken, { lang });
+        return;
+      } catch {
+        // Fall through
+      }
+    }
+
     try {
       const res = await fetch('/api/converse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           sessionId: sessionIdRef.current,
           text,
           userId: 'user_meena',
         }),
       });
+
+      if (res.status === 401) {
+        setAuthState('unauthenticated');
+        const unauthMsg =
+          lang === 'hi-IN'
+            ? 'Suraksha ke liye pehle fingerprint se login karein.'
+            : 'Please log in with your fingerprint first for safety.';
+        speak(unauthMsg, { lang });
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}`);
@@ -133,6 +366,16 @@ export const App: React.FC = () => {
       <header className="app-header">
         <h1 className="app-title">Awaaz Pay</h1>
         <div className="header-controls">
+          {authState === 'authenticated' && (
+            <button
+              type="button"
+              className="action-pill-btn logout-pill"
+              onClick={handleLogout}
+              aria-label="Logout"
+            >
+              🔒 Logout
+            </button>
+          )}
           <button
             type="button"
             className="lang-toggle-btn"
@@ -143,6 +386,85 @@ export const App: React.FC = () => {
           </button>
         </div>
       </header>
+
+      {/* Auth Gate for unauthenticated state */}
+      {authState === 'unauthenticated' && (
+        <section className="auth-card" aria-label="Fingerprint passkey login">
+          <div className="auth-icon-wrapper" aria-hidden="true">
+            🔐
+          </div>
+          <h2 className="auth-heading">
+            {lang === 'hi-IN' ? 'Suraksha Lock (Passkey)' : 'Security Lock (Passkey)'}
+          </h2>
+          <p className="auth-description">
+            {lang === 'hi-IN'
+              ? 'Awaaz Pay use karne ke liye apni ungli sensor par rakhein.'
+              : 'Please place your finger on the sensor to log in with your passkey.'}
+          </p>
+
+          <div className="auth-button-group">
+            <button
+              type="button"
+              className="auth-primary-btn"
+              onClick={handlePasskeyLogin}
+              disabled={isPasskeyLoading}
+              aria-label={lang === 'hi-IN' ? 'Fingerprint se login karein' : 'Login with fingerprint'}
+            >
+              👆 {isPasskeyLoading ? 'Verifying...' : lang === 'hi-IN' ? 'Fingerprint se Login' : 'Login with Passkey'}
+            </button>
+
+            <button
+              type="button"
+              className="auth-secondary-btn"
+              onClick={handlePasskeyRegister}
+              disabled={isPasskeyLoading}
+              aria-label={lang === 'hi-IN' ? 'Naya fingerprint jodein' : 'Register new passkey'}
+            >
+              ➕ {lang === 'hi-IN' ? 'Naya Fingerprint Jodein' : 'Register Fingerprint'}
+            </button>
+          </div>
+
+          {authError && (
+            <p className="error-banner" role="alert">
+              ⚠️ {authError}
+            </p>
+          )}
+        </section>
+      )}
+
+      {/* Voice Challenge Box */}
+      {voiceChallenge.isOpen && (
+        <section className="voice-challenge-card" role="dialog" aria-label="Voice Challenge">
+          <div className="voice-challenge-header">
+            <h3>🎙️ {lang === 'hi-IN' ? 'Voice Challenge (Risk Signal)' : 'Voice Challenge'}</h3>
+            <button
+              type="button"
+              className="close-challenge-btn"
+              onClick={() => setVoiceChallenge({ isOpen: false })}
+              aria-label="Close voice challenge"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="challenge-prompt">
+            <strong>{voiceChallenge.phrase}</strong>
+          </p>
+          <p className="challenge-hint">
+            {lang === 'hi-IN'
+              ? 'Mic dabakar upar diya gaya vakya bolein.'
+              : 'Tap mic and speak the phrase above.'}
+          </p>
+          <p className="challenge-notice">
+            ℹ️ <em>Voice is a secondary risk signal only, not a hard lock.</em>
+          </p>
+          {voiceChallenge.result && (
+            <div className={`challenge-result ${voiceChallenge.result.passed ? 'pass' : 'fail'}`}>
+              <strong>{voiceChallenge.result.passed ? '✅ Passed' : '⚠️ Risk Flagged'}</strong> ({voiceChallenge.result.score}% match)
+              <p>{voiceChallenge.result.message}</p>
+            </div>
+          )}
+        </section>
+      )}
 
       <div
         className="status-bar"
@@ -243,6 +565,15 @@ export const App: React.FC = () => {
           aria-label={lang === 'hi-IN' ? 'Awaaz roko' : 'Stop audio'}
         >
           ⏹ {lang === 'hi-IN' ? 'Ruko' : 'Stop'}
+        </button>
+
+        <button
+          type="button"
+          className="action-pill-btn voice-challenge-pill"
+          onClick={startVoiceChallenge}
+          aria-label={lang === 'hi-IN' ? 'Voice challenge shuru karein' : 'Start voice challenge'}
+        >
+          🎙️ {lang === 'hi-IN' ? 'Voice Challenge' : 'Voice Signal'}
         </button>
 
         <div className="speed-selector" aria-label="Speech speed">

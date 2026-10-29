@@ -1,4 +1,5 @@
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import express, { type Express, type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +11,8 @@ import { createWebhooksRouter } from './routes/webhooks.js';
 import { createNotificationsRouter } from './routes/notifications.js';
 import { createPaymentsRouter } from './routes/payments.js';
 import { createConverseRouter } from './routes/converse.js';
+import { createAuthRouter } from './routes/auth.js';
+import { requireAuth } from './auth/middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +27,13 @@ export function createApp(db?: Database.Database): Express {
   const app = express();
   const database = db ?? getDb();
 
-  app.use(cors());
+  app.use(
+    cors({
+      origin: true,
+      credentials: true,
+    })
+  );
+  app.use(cookieParser());
   app.use(express.json());
 
   app.get('/api/health', (_req: Request, res: Response<HealthResponse>) => {
@@ -34,10 +43,11 @@ export function createApp(db?: Database.Database): Express {
     });
   });
 
+  app.use('/api/auth', createAuthRouter(database));
   app.use('/api/family', createFamilyRouter(database));
   app.use('/api/webhooks', createWebhooksRouter(database));
   app.use('/api/notifications', createNotificationsRouter(database));
-  app.use('/api/payments', createPaymentsRouter(database));
+  app.use('/api/payments', requireAuth, createPaymentsRouter(database));
   app.use('/api', createConverseRouter(database));
 
   if (fs.existsSync(webDistPath)) {

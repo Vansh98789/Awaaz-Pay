@@ -98,6 +98,7 @@ Voiceprints can be fooled by recordings and AI voice cloning. So:
 - Voice match is a **risk signal**: a low match adds checks instead of silently blocking.
 - A **random-phrase challenge** (“Say: neela kela saat”) defeats simple replay, not a live clone.
 - Say plainly in the pitch: **“voice is one signal, not the key.”**
+- **Architecture Note (Task 14 implementation):** Voice challenge compares user speech against a random Hindi phrase using fuzzy matching (`calculateFuzzyMatchScore`). A failed challenge logs an audit event (`voice_challenge_failed`) and flags secondary risk; it is never used as a hard lock or sole barrier to payment. Primary authentication is strictly managed via WebAuthn fingerprint passkeys.
 
 ### 5.6 Account opening for a blind person
 
