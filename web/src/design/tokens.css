@@ -1,0 +1,122 @@
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/noto-sans-devanagari/500.css';
+@import '@fontsource/noto-sans-devanagari/700.css';
+
+:root {
+  /* Light Theme (Default) */
+  --bg: #F8F8F6;
+  --surface: #FFFFFF;
+  --text: #111111;
+  --text-muted: #4A4A4A;
+  --accent: #1D4ED8;
+  --accent-text: #FFFFFF;
+  --success: #0F7B3F;
+  --success-text: #FFFFFF;
+  --danger: #B42318;
+  --danger-text: #FFFFFF;
+  --warning: #8A5A00;
+  --warning-text: #FFFFFF;
+  --border: #D6D6D2;
+
+  /* Typography */
+  --font-sans: 'Inter', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --text-body: 1.25rem;       /* 20px */
+  --text-body-large: 1.5rem; /* 24px */
+  --text-headline: 2.25rem;  /* 36px */
+  --text-headline-large: 2.75rem; /* 44px */
+  --text-amount: 4.5rem;     /* 72px */
+  --text-amount-large: 5.5rem; /* 88px */
+  --line-height: 1.4;
+
+  /* Layout & Spacing */
+  --max-width: 560px;
+  --min-target: 64px;
+  --space-unit: 16px;
+  --space-group: 32px;
+  --radius-pill: 9999px;
+  --radius-dot: 50%;
+  --radius-card: 16px;
+
+  /* Focus Indicator */
+  --focus-ring: 4px solid var(--accent);
+  --focus-offset: 3px;
+}
+
+/* Dark Theme */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E0E0F;
+    --surface: #18181A;
+    --text: #F4F4F2;
+    --text-muted: #B8B8B4;
+    --accent: #8AAEFF;
+    --accent-text: #0E0E0F;
+    --success: #5FD08A;
+    --success-text: #0E0E0F;
+    --danger: #FF8F85;
+    --danger-text: #0E0E0F;
+    --warning: #F2C063;
+    --warning-text: #0E0E0F;
+    --border: #35353A;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0E0E0F;
+  --surface: #18181A;
+  --text: #F4F4F2;
+  --text-muted: #B8B8B4;
+  --accent: #8AAEFF;
+  --accent-text: #0E0E0F;
+  --success: #5FD08A;
+  --success-text: #0E0E0F;
+  --danger: #FF8F85;
+  --danger-text: #0E0E0F;
+  --warning: #F2C063;
+  --warning-text: #0E0E0F;
+  --border: #35353A;
+}
+
+/* Base Styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-sans);
+  background-color: var(--bg);
+  color: var(--text);
+  line-height: var(--line-height);
+  font-size: 100%;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background-color: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Accessibility: Focus Rings */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Reduced Motion Handling */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

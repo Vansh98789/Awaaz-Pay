@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export interface UseSpeechSynthesisOptions {
   defaultLang?: string;
   defaultSpeed?: number;
+  outputMode?: 'voice' | 'screen_reader';
 }
 
 export interface UseSpeechSynthesisReturn {
@@ -10,6 +11,8 @@ export interface UseSpeechSynthesisReturn {
   speed: number;
   lastSpokenText: string;
   isSupported: boolean;
+  outputMode: 'voice' | 'screen_reader';
+  setOutputMode: (mode: 'voice' | 'screen_reader') => void;
   speak: (text: string, options?: { lang?: string; speed?: number }) => void;
   stop: () => void;
   repeatLastReply: () => void;
@@ -19,13 +22,30 @@ export interface UseSpeechSynthesisReturn {
 export function useSpeechSynthesis(
   options: UseSpeechSynthesisOptions = {}
 ): UseSpeechSynthesisReturn {
-  const { defaultLang = 'hi-IN', defaultSpeed = 1.0 } = options;
+  const { defaultLang = 'hi-IN', defaultSpeed = 1.0, outputMode: initialMode = 'voice' } = options;
 
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speed, setSpeedState] = useState(defaultSpeed);
+  const [outputMode, setOutputModeState] = useState<'voice' | 'screen_reader'>(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('awaaz_output_mode');
+      if (saved === 'voice' || saved === 'screen_reader') return saved;
+    }
+    return initialMode;
+  });
   const [lastSpokenText, setLastSpokenText] = useState('');
   const [isSupported, setIsSupported] = useState(true);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  const outputModeRef = useRef(outputMode);
+  outputModeRef.current = outputMode;
+
+  const setOutputMode = useCallback((mode: 'voice' | 'screen_reader') => {
+    setOutputModeState(mode);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('awaaz_output_mode', mode);
+    }
+  }, []);
 
   const speedRef = useRef(speed);
   speedRef.current = speed;
@@ -115,6 +135,12 @@ export function useSpeechSynthesis(
       };
 
       setLastSpokenText(text);
+
+      // In Screen Reader mode, TalkBack/VoiceOver handles reading the live region directly.
+      if (outputModeRef.current === 'screen_reader') {
+        return;
+      }
+
       window.speechSynthesis.speak(utterance);
     },
     [defaultLang, selectVoice]
@@ -136,6 +162,8 @@ export function useSpeechSynthesis(
     speed,
     lastSpokenText,
     isSupported,
+    outputMode,
+    setOutputMode,
     speak,
     stop,
     repeatLastReply,

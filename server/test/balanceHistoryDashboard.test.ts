@@ -21,6 +21,14 @@ vi.mock('../src/paypal/index.js', () => ({
   PayPalError: class extends Error {},
 }));
 
+vi.mock('../src/llm/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/llm/index.js')>();
+  return {
+    ...actual,
+    completeJson: vi.fn().mockRejectedValue(new actual.LLMUnavailableError(['gemini'], 'Mock offline')),
+  };
+});
+
 import { createApp } from '../src/app.js';
 import { createDb } from '../src/db/connection.js';
 import { seedDemoData } from '../src/db/seed.js';

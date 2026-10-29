@@ -1,0 +1,56 @@
+.status-banner {
+  width: 100%;
+  padding: 1.25rem 1.5rem;
+  border-radius: var(--radius-card, 16px);
+  font-family: var(--font-sans);
+  font-size: var(--text-body, 1.25rem);
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  border: 2px solid transparent;
+}
+
+.banner-prefix {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.banner-dots {
+  font-size: 0.9rem;
+  letter-spacing: 2px;
+}
+
+.banner-word-label {
+  font-size: var(--text-body-large, 1.5rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.banner-content {
+  font-weight: 500;
+}
+
+/* Variant: Success */
+.status-banner.banner-success {
+  background-color: var(--success);
+  color: var(--success-text);
+  border-color: var(--success);
+}
+
+/* Variant: Warning */
+.status-banner.banner-warning {
+  background-color: var(--warning);
+  color: var(--warning-text);
+  border-color: var(--warning);
+}
+
+/* Variant: Danger */
+.status-banner.banner-danger {
+  background-color: var(--danger);
+  color: var(--danger-text);
+  border-color: var(--danger);
+}

@@ -43,13 +43,14 @@ interface LimitsData {
   max_new_payees_per_day: number;
 }
 
-const darkGridTheme = themeQuartz.withParams({
-  backgroundColor: '#141419',
-  foregroundColor: '#f8fafc',
-  headerBackgroundColor: '#1c1c24',
-  headerTextColor: '#38bdf8',
-  borderColor: '#27272a',
-  rowHoverColor: '#1e293b',
+const customGridTheme = themeQuartz.withParams({
+  backgroundColor: '#18181A',
+  foregroundColor: '#F4F4F2',
+  headerBackgroundColor: '#0E0E0F',
+  headerTextColor: '#8AAEFF',
+  borderColor: '#35353A',
+  rowHoverColor: '#27272a',
+  fontFamily: 'var(--font-sans)',
 });
 
 export const FamilyDashboardPage: React.FC = () => {
@@ -187,24 +188,29 @@ export const FamilyDashboardPage: React.FC = () => {
       {
         field: 'risk',
         headerName: 'Risk',
-        width: 110,
+        width: 140,
         filter: true,
         cellRenderer: (params: any) => {
           const val = params.value;
-          const color = val === 'High' ? '#ef4444' : val === 'Medium' ? '#f59e0b' : '#22c55e';
+          const color = val === 'High' ? 'var(--danger)' : val === 'Medium' ? 'var(--warning)' : 'var(--success)';
           const bg = val === 'High' ? 'rgba(239,68,68,0.2)' : val === 'Medium' ? 'rgba(245,158,11,0.2)' : 'rgba(34,197,94,0.2)';
+          const dots = val === 'High' ? '● ● ●' : val === 'Medium' ? '▲ ●' : '●';
           return (
             <span
               style={{
-                padding: '0.2rem 0.6rem',
-                borderRadius: '0.35rem',
-                fontSize: '0.8rem',
+                padding: '0.25rem 0.65rem',
+                borderRadius: 'var(--radius-pill)',
+                fontSize: '0.85rem',
                 fontWeight: 700,
                 backgroundColor: bg,
                 color,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
               }}
             >
-              {val}
+              <span>{val}</span>
+              <span aria-hidden="true" style={{ fontSize: '0.75rem', opacity: 0.85 }}>{dots}</span>
             </span>
           );
         },
@@ -212,8 +218,22 @@ export const FamilyDashboardPage: React.FC = () => {
       {
         field: 'decision',
         headerName: 'Decision',
-        width: 180,
+        width: 190,
         filter: true,
+        cellRenderer: (params: any) => {
+          const d = params.value || '';
+          const isBlock = d === 'block';
+          const isApprove = d === 'need_guardian_approval';
+          const label = isBlock ? 'Blocked' : isApprove ? 'Needs Approval' : 'Allowed';
+          const dots = isBlock ? '■ ■ ■' : isApprove ? '▲ ▲' : '●';
+          const color = isBlock ? 'var(--danger)' : isApprove ? 'var(--warning)' : 'var(--success)';
+          return (
+            <span style={{ fontWeight: 700, color, display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span>{label}</span>
+              <span aria-hidden="true" style={{ fontSize: '0.8rem', opacity: 0.85 }}>{dots}</span>
+            </span>
+          );
+        },
       },
       {
         field: 'status',
@@ -377,7 +397,7 @@ export const FamilyDashboardPage: React.FC = () => {
 
         <div style={{ height: '460px', width: '100%' }}>
           <AgGridReact<ActivityRow>
-            theme={darkGridTheme}
+            theme={customGridTheme}
             rowData={transactions}
             columnDefs={columnDefs}
             quickFilterText={filterText}

@@ -1,4 +1,12 @@
 import React, { useEffect, useState } from 'react';
+import {
+  Page,
+  DotWordmark,
+  Headline,
+  BodyText,
+  BigButton,
+  StatusBanner,
+} from '../design/index.js';
 
 interface ApprovalDetails {
   approvalId: string;
@@ -69,103 +77,135 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
 
   if (loading) {
     return (
-      <div className="guardian-page-container">
-        <div className="guardian-card loading">
-          <h2>⏳ Loading approval request...</h2>
-        </div>
-      </div>
+      <Page headerContent={<DotWordmark size={140} />}>
+        <Headline level={1}>Loading approval...</Headline>
+        <BodyText muted>Please wait while we fetch the transaction details.</BodyText>
+      </Page>
     );
   }
 
   if (error || !details) {
     return (
-      <div className="guardian-page-container">
-        <div className="guardian-card error-card">
-          <h2>⚠️ Unable to load approval</h2>
-          <p>{error || 'Request not found'}</p>
-          <a href="/" className="back-link">Return to Home</a>
-        </div>
-      </div>
+      <Page
+        headerContent={<DotWordmark size={140} />}
+        footerContent={
+          <BigButton variant="secondary" onClick={() => (window.location.href = '/')}>
+            Return to Home
+          </BigButton>
+        }
+      >
+        <StatusBanner variant="danger" label="Error">
+          {error || 'Approval request not found or expired.'}
+        </StatusBanner>
+      </Page>
     );
   }
 
   if (decisionResult) {
     return (
-      <div className="guardian-page-container">
-        <div className={`guardian-card result-card ${decisionResult}`}>
-          <div className="result-icon">{decisionResult === 'approved' ? '✅' : '🛑'}</div>
-          <h2>Payment {decisionResult === 'approved' ? 'Approved' : 'Denied'}</h2>
-          <p>
-            You {decisionResult} ₹{details.amount} to <strong>{details.payee}</strong> for {details.userName}.
-          </p>
-          <p className="sub-note">
-            {decisionResult === 'approved'
-              ? 'The user will be prompted to speak their final confirmation.'
-              : 'The transaction has been safely stopped.'}
-          </p>
-        </div>
-      </div>
+      <Page
+        headerContent={<DotWordmark size={140} />}
+        footerContent={
+          <BigButton variant="primary" onClick={() => (window.location.href = '/')}>
+            Done
+          </BigButton>
+        }
+      >
+        <StatusBanner
+          variant={decisionResult === 'approved' ? 'success' : 'danger'}
+          label={decisionResult === 'approved' ? 'Approved' : 'Denied'}
+        >
+          You {decisionResult} ₹{details.amount} to <strong>{details.payee}</strong> for {details.userName}.
+        </StatusBanner>
+        <BodyText size="large" muted>
+          {decisionResult === 'approved'
+            ? 'The user will be prompted on their phone to speak their final confirmation.'
+            : 'The transaction has been safely stopped.'}
+        </BodyText>
+      </Page>
     );
   }
 
   return (
-    <div className="guardian-page-container">
-      <header className="guardian-header">
-        <h1>🛡️ Awaaz Pay Guardian Portal</h1>
-        <p className="guardian-subtitle">Family Protection & Approval Request</p>
-      </header>
-
-      <main className="guardian-card request-card">
-        <div className="request-badge">⚠️ Tier 3 Limit Reached</div>
-
-        <div className="request-details">
-          <div className="detail-row">
-            <span className="detail-label">User:</span>
-            <span className="detail-value">{details.userName}</span>
-          </div>
-          <div className="detail-row">
-            <span className="detail-label">Paying To:</span>
-            <span className="detail-value payee-name">{details.payee}</span>
-          </div>
-          <div className="detail-row highlight-row">
-            <span className="detail-label">Amount:</span>
-            <span className="detail-value amount-value">₹{details.amount.toLocaleString('en-IN')}</span>
-          </div>
-        </div>
-
-        <div className="flagged-box">
-          <p className="flagged-title">Why was this flagged?</p>
-          <p className="flagged-reason">
-            Amount exceeds normal spending limits or is sent to a new payee requiring guardian confirmation.
-          </p>
-        </div>
-
-        <div className="guardian-buttons-grid">
-          <button
-            type="button"
-            className="giant-decision-btn approve-btn"
+    <Page
+      headerContent={
+        <>
+          <DotWordmark size={140} />
+          <Headline level={1}>Guardian Approval</Headline>
+          <BodyText muted>A high-value or new-payee transaction requires your review.</BodyText>
+        </>
+      }
+      footerContent={
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
+          <BigButton
+            variant="primary"
             onClick={() => handleDecision('approve')}
             disabled={deciding || details.isExpired}
-            aria-label="Approve payment"
+            loading={deciding}
+            loadingText="Submitting decision..."
           >
-            <span className="btn-icon">✅</span>
-            <span className="btn-text">Approve</span>
-            <span className="btn-subtext">Allow this payment</span>
-          </button>
+            Approve ₹{details.amount}
+          </BigButton>
 
-          <button
-            type="button"
-            className="giant-decision-btn deny-btn"
+          <BigButton
+            variant="danger"
             onClick={() => handleDecision('deny')}
             disabled={deciding || details.isExpired}
-            aria-label="Deny payment"
           >
-            <span className="btn-icon">🛑</span>
-            <span className="btn-text">Deny</span>
-            <span className="btn-subtext">Stop this payment</span>
-          </button>
+            Deny Payment
+          </BigButton>
         </div>
-      </main>
-    </div>
+      }
+    >
+      <div
+        style={{
+          width: '100%',
+          backgroundColor: 'var(--surface)',
+          border: '2px solid var(--border)',
+          borderRadius: 'var(--radius-card, 16px)',
+          padding: '1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1.25rem',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <BodyText muted>User:</BodyText>
+          <strong style={{ fontSize: 'var(--text-body-large)' }}>{details.userName}</strong>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <BodyText muted>Paying to:</BodyText>
+          <strong style={{ fontSize: 'var(--text-body-large)' }}>{details.payee}</strong>
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            padding: '1rem',
+            backgroundColor: 'var(--bg)',
+            borderRadius: '12px',
+          }}
+        >
+          <BodyText muted>Amount:</BodyText>
+          <div
+            style={{
+              fontSize: 'var(--text-amount, 4.5rem)',
+              fontWeight: 700,
+              fontFamily: 'var(--font-sans)',
+              lineHeight: 1,
+            }}
+          >
+            ₹{details.amount}
+          </div>
+        </div>
+
+        <StatusBanner variant="warning" label="Flagged">
+          Amount exceeds standard spending limits or is sent to an unverified recipient.
+        </StatusBanner>
+      </div>
+    </Page>
   );
 };
