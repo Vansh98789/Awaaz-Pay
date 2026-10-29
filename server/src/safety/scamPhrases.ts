@@ -98,6 +98,9 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     isCritical: true,
     phrases: [
       'lottery',
+      'prize',
+      'prize fee',
+      'lottery fee',
       'won a prize',
       'cash prize',
       'lucky draw',
@@ -185,6 +188,8 @@ export const SCAM_CATEGORIES: CategoryDefinition[] = [
     isCritical: false,
     phrases: [
       'processing fee',
+      'prize fee',
+      'lottery fee',
       'refund',
       'customs fee',
       'release fee',

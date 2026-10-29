@@ -6,7 +6,7 @@ const BALANCE = /\b(balance|paisa|kitna|bacha|wallet|account|funds?)\b/i;
 const HISTORY = /\b(history|transactions?|kya\s*hua|dikhao|recent|last|hafte|mahine)\b/i;
 const REPEAT = /\b(dobara|phir|again|repeat|wapas)\b/i;
 const CANCEL = /\b(cancel|band\s*karo|rok|stop|chhodh?o)\b/i;
-const SCAM = /(?<!@[\w.-]*)\b(thaga|scam|fraud|dhoka|cheated?)\b/i;
+const SCAM = /(?<!@[\w.-]*)\b(thaga|scam(med)?|fraud|dhoka|cheated?)\b(?!@[\w.-]*)/i;
 const HELPER = /\b(helper|sahayak|guardian|add\s*karo)\b/i;
 const EXPLAIN = /\bexplain\b|\b(kyun|kyon|why|kaise)\b.{0,40}\b(payment|transaction|kata|kati|gaya)\b|\b(payment|transaction)\b.{0,40}\b(kyun|kyon|why|kata|kati)\b/i;
 
@@ -103,7 +103,7 @@ export function regexFallback(
 ): IntentResult {
   const lang = detectLang(text);
 
-  if (state === 'awaiting_confirmation') {
+  if (state === 'awaiting_confirmation' || state === 'awaiting_scam_answers') {
     const quick = quickConfirmation(text);
     if (quick) return make(quick, lang, 1);
   }

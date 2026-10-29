@@ -23,8 +23,25 @@ vi.mock('../src/paypal/index.js', () => ({
   PayPalError: class extends Error {},
 }));
 
+vi.mock('../src/llm/index.js', () => {
+  class LLMUnavailableError extends Error {
+    providers: string[];
+    constructor(providers: string[] = ['gemini', 'groq']) {
+      super(`All LLM providers failed: ${providers.join(', ')}`);
+      this.name = 'LLMUnavailableError';
+      this.providers = providers;
+    }
+  }
+  return {
+    completeJson: vi.fn().mockRejectedValue(new LLMUnavailableError()),
+    LLMUnavailableError,
+  };
+});
+
 import { createPayoutBatch } from '../src/paypal/index.js';
+import { completeJson, LLMUnavailableError } from '../src/llm/index.js';
 const mockCreatePayout = vi.mocked(createPayoutBatch);
+const mockCompleteJson = vi.mocked(completeJson);
 
 describe('Conversation Orchestrator (Task 12)', () => {
   let db: Database.Database;
@@ -204,5 +221,152 @@ describe('Conversation Orchestrator (Task 12)', () => {
 
     expect(repeatRes.status).toBe(200);
     expect(repeatRes.body.replyText).toContain('2,000');
+  });
+
+  describe('Task 13: Scam interview and guardian alerts', () => {
+    it('scripted dialogue: user says someone told them to pay a prize fee gets blocked with calm interruption and guardian alert', async () => {
+      const sessionId = 'session-scam-block-1';
+
+      // Turn 1: User initiates payment to unknown recipient / prize account
+      const turn1 = await request(testApp)
+        .post('/api/converse')
+        .send({ sessionId, text: 'winner@lottery.com ko 500 bhej do' });
+
+      expect(turn1.status).toBe(200);
+      expect(turn1.body.state).toBe('awaiting_scam_answers');
+      expect(turn1.body.replyText).toContain('Kya kisi ne phone ya message par aapko ye payment karne ko kaha hai?');
+
+      // Turn 2: User responds saying someone told them to pay prize fee
+      const turn2 = await request(testApp)
+        .post('/api/converse')
+        .send({
+          sessionId,
+          text: 'Haan phone par bola tha prize fee bhej do tab lottery milegi',
+        });
+
+      expect(turn2.status).toBe(200);
+      expect(turn2.body.state).toBe('idle');
+      // Calm interruption: this may be a scam, real banks or police never ask, stopping payment, call family
+      expect(turn2.body.replyText).toContain('scam ho sakta hai');
+      expect(turn2.body.replyText).toContain('Asli bank ya police kabhi bhi is tarah phone par OTP ya paise nahi maangte');
+      expect(turn2.body.replyText).toContain('Main yeh payment rok rahi hoon');
+      expect(turn2.body.replyText).toContain('parivaar');
+
+      // Payout must not be called
+      expect(mockCreatePayout).not.toHaveBeenCalled();
+
+      // Check guardian notification created in DB
+      const notifications = db
+        .prepare('SELECT * FROM notifications WHERE user_id = ? AND kind = ?')
+        .all('user_meena', 'scam_alert') as Array<{ message: string; spoken_text: string }>;
+
+      expect(notifications.length).toBeGreaterThan(0);
+      const notif = notifications[0];
+      expect(notif.message).toMatch(/500/);
+      expect(notif.message).toMatch(/winner@lottery\.com/);
+      expect(notif.message).toMatch(/prize_lottery|refund_or_fee|caller|High scam risk/i);
+
+      // Check audit event written
+      const audit = db
+        .prepare('SELECT * FROM audit_events WHERE user_id = ? AND kind = ?')
+        .all('user_meena', 'scam_payment_blocked');
+      expect(audit.length).toBeGreaterThan(0);
+
+      // Check transaction recorded with status failed
+      const tx = db
+        .prepare('SELECT * FROM transactions WHERE user_id = ? AND status = ? AND decision = ?')
+        .get('user_meena', 'failed', 'block');
+      expect(tx).toBeDefined();
+    });
+
+    it('normal payment to a verified merchant passes scam interview when all answers are no', async () => {
+      mockCreatePayout.mockResolvedValueOnce({
+        batch_header: {
+          payout_batch_id: 'BATCH-MERCHANT-PASS',
+          batch_status: 'SUCCESS',
+        },
+      });
+
+      const sessionId = 'session-merchant-pass-1';
+
+      // Turn 1: Pay verified merchant (Ravi Cabs, Tier 2)
+      const turn1 = await request(testApp)
+        .post('/api/converse')
+        .send({ sessionId, text: 'Ravi Cabs ko 200 bhej do' });
+
+      expect(turn1.status).toBe(200);
+      expect(turn1.body.state).toBe('awaiting_scam_answers');
+      expect(turn1.body.replyText).toContain('Kya kisi ne phone ya message par aapko ye payment karne ko kaha hai?');
+
+      // Turn 2: Answer NO to being told to pay
+      const turn2 = await request(testApp)
+        .post('/api/converse')
+        .send({ sessionId, text: 'nahi' });
+
+      expect(turn2.status).toBe(200);
+      expect(turn2.body.state).toBe('awaiting_scam_answers');
+      // For new payee (merchant), asks Question 2:
+      expect(turn2.body.replyText).toContain('Kya aap is insaan ko jaante hain?');
+
+      // Turn 3: Answer NO to knowing payee personally (all answers are no)
+      const turn3 = await request(testApp)
+        .post('/api/converse')
+        .send({ sessionId, text: 'nahi' });
+
+      expect(turn3.status).toBe(200);
+      // Low risk continues -> enters awaiting_confirmation!
+      expect(turn3.body.state).toBe('awaiting_confirmation');
+      expect(turn3.body.replyText).toContain('Ravi Cabs');
+      expect(turn3.body.replyText).toContain('200');
+      expect(turn3.body.replyText).toMatch(/haan ya nahi/i);
+
+      // Turn 4: User confirms out loud
+      const turn4 = await request(testApp)
+        .post('/api/converse')
+        .send({ sessionId, text: 'haan kar do' });
+
+      expect(turn4.status).toBe(200);
+      expect(turn4.body.state).toBe('idle');
+      expect(turn4.body.replyText).toContain('Payment safal raha');
+      expect(mockCreatePayout).toHaveBeenCalledTimes(1);
+      expect(getBalance(db, 'user_meena')).toBe(1800);
+    });
+
+    it('LLM-down fallback: keyword detector alone blocks scam payment without LLM', async () => {
+      // Ensure completeJson rejects with LLMUnavailableError
+      mockCompleteJson.mockRejectedValue(new LLMUnavailableError(['gemini', 'groq']));
+
+      const sessionId = 'session-llm-down-1';
+
+      // Turn 1: User says payment for prize fee
+      const turn1 = await request(testApp)
+        .post('/api/converse')
+        .send({ sessionId, text: 'fraud@prize.com ko 300 bhej do' });
+
+      expect(turn1.status).toBe(200);
+      expect(turn1.body.state).toBe('awaiting_scam_answers');
+      expect(turn1.body.replyText).toContain('Kya kisi ne phone ya message par aapko ye payment karne ko kaha hai?');
+
+      // Turn 2: User responds with caller instruction and prize keyword
+      const turn2 = await request(testApp)
+        .post('/api/converse')
+        .send({
+          sessionId,
+          text: 'haan lottery prize fee bharne ko bola hai',
+        });
+
+      expect(turn2.status).toBe(200);
+      expect(turn2.body.state).toBe('idle');
+      expect(turn2.body.replyText).toContain('scam ho sakta hai');
+      expect(turn2.body.replyText).toContain('Main yeh payment rok rahi hoon');
+
+      expect(mockCreatePayout).not.toHaveBeenCalled();
+
+      // Check notification created
+      const notifs = db
+        .prepare('SELECT * FROM notifications WHERE user_id = ? AND kind = ?')
+        .all('user_meena', 'scam_alert');
+      expect(notifs.length).toBeGreaterThan(0);
+    });
   });
 });

@@ -16,6 +16,14 @@ export interface SessionData {
   lastReply?: { text: string; lang: 'hi' | 'en' };
   unclearAttempts: number;
   updatedAt: number;
+
+  // Task 13 scam interview fields
+  scamInterviewStep?: 'asked_told_to_pay' | 'asked_knows_payee';
+  scamToldToPay?: boolean;
+  scamKnowsPayee?: boolean;
+  isNewPayee?: boolean;
+  accumulatedText?: string;
+  pendingPayeeRaw?: string;
 }
 
 const sessionStore = new Map<string, SessionData>();
@@ -55,6 +63,12 @@ export function resetSession(sessionId: string): void {
     session.pendingAmount = undefined;
     session.unclearAttempts = 0;
     session.updatedAt = Date.now();
+    session.scamInterviewStep = undefined;
+    session.scamToldToPay = undefined;
+    session.scamKnowsPayee = undefined;
+    session.isNewPayee = undefined;
+    session.accumulatedText = undefined;
+    session.pendingPayeeRaw = undefined;
   }
 }
 

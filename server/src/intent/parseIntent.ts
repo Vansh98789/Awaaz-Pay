@@ -43,7 +43,7 @@ export async function parseIntent(
   contacts: string[],
   state: ConversationState,
 ): Promise<IntentResult> {
-  if (state === 'awaiting_confirmation') {
+  if (state === 'awaiting_confirmation' || state === 'awaiting_scam_answers') {
     const quick = quickConfirmation(transcript);
     if (quick !== null) {
       return {

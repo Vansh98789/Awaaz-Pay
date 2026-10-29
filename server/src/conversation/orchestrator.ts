@@ -1,7 +1,17 @@
 import type Database from 'better-sqlite3';
 import { parseIntent } from '../intent/parseIntent.js';
-import { listContacts, getBalance, getUserById } from '../db/repository.js';
+import {
+  listContacts,
+  getBalance,
+  getUserById,
+  createNotification,
+  writeAudit,
+  recordTransaction,
+} from '../db/repository.js';
 import { preparePayment, confirmPayment } from '../payments/pipeline.js';
+import { resolvePayee, buildPaymentContext } from '../payments/context.js';
+import { evaluatePayment } from '../rules/engine.js';
+import { detectScamSignals, combineRisk } from '../safety/scamSignals.js';
 import { templates } from './templates.js';
 import {
   getSession,
@@ -30,7 +40,14 @@ export async function processConversation(
     session.lang || (user?.language === 'en' ? 'en' : 'hi');
 
   const contactsList = listContacts(db, userId);
-  const contactAliases = contactsList.map((c) => c.alias);
+  const merchantsList = (
+    db.prepare('SELECT name FROM merchants').all() as Array<{ name: string }>
+  ).map((m) => m.name);
+  const contactAliases = [
+    ...contactsList.map((c) => c.alias),
+    ...contactsList.map((c) => c.display_name),
+    ...merchantsList,
+  ];
 
   let replyText = '';
 
@@ -91,6 +108,254 @@ export async function processConversation(
         resetSession(sessionId);
       }
     }
+  } else if (session.state === 'awaiting_scam_answers') {
+    const accumulatedText = `${session.accumulatedText || ''} ${text}`.trim();
+    const intentResult = await parseIntent(
+      text,
+      contactAliases,
+      'awaiting_scam_answers'
+    );
+
+    if (intentResult.intent === 'cancel') {
+      replyText = templates[lang].payment_cancelled;
+      resetSession(sessionId);
+      return {
+        replyText,
+        replyLanguage: lang,
+        state: 'idle',
+      };
+    }
+
+    let userChoice: 'yes' | 'no' | null = null;
+    if (intentResult.intent === 'confirm_yes') {
+      userChoice = 'yes';
+    } else if (intentResult.intent === 'confirm_no') {
+      userChoice = 'no';
+    }
+
+    if (userChoice === null) {
+      session.unclearAttempts++;
+      if (session.unclearAttempts < 2) {
+        replyText = templates[lang].unclear_first_try;
+        updateSession(sessionId, {
+          unclearAttempts: session.unclearAttempts,
+          accumulatedText,
+        });
+      } else {
+        replyText = templates[lang].unclear_cancel;
+        resetSession(sessionId);
+      }
+    } else if (session.scamInterviewStep === 'asked_told_to_pay') {
+      const toldToPay = userChoice === 'yes';
+      const signals = detectScamSignals(accumulatedText);
+      const risk = combineRisk(signals, {
+        toldToPayBySomeone: toldToPay,
+        unverifiedPayee: session.isNewPayee,
+        payeeOnBlocklist: false,
+      });
+
+      if (risk === 'high') {
+        recordTransaction(db, {
+          user_id: userId,
+          type: 'send_money',
+          amount: session.pendingAmount || 0,
+          currency: 'INR',
+          counterparty_type: session.isNewPayee ? 'new_personal' : 'contact',
+          counterparty_id: session.pendingPayeeRaw || 'unknown',
+          tier: 3,
+          risk_score: Math.max(signals.score, 0.9),
+          decision: 'block',
+          status: 'failed',
+          paypal_ref: null,
+        });
+
+        writeAudit(db, {
+          user_id: userId,
+          kind: 'scam_payment_blocked',
+          payload: JSON.stringify({
+            payee: session.pendingPayeeName,
+            amount: session.pendingAmount,
+            reason: 'High scam risk detected in interview',
+            categories: signals.categories,
+            score: signals.score,
+            toldToPay,
+          }),
+        });
+
+        createNotification(db, {
+          user_id: userId,
+          kind: 'scam_alert',
+          message: `Scam alert: Payment of ₹${session.pendingAmount} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${signals.categories.join(', ') || 'instruction by caller'}).`,
+          spoken_text: `Scam chetavni: ${session.pendingPayeeName} ko ₹${session.pendingAmount} ka payment scam sandeh ke kaaran rok diya gaya.`,
+        });
+
+        replyText = templates[lang].scam_blocked_interruption;
+        resetSession(sessionId);
+      } else if (session.isNewPayee) {
+        updateSession(sessionId, {
+          scamInterviewStep: 'asked_knows_payee',
+          scamToldToPay: toldToPay,
+          accumulatedText,
+          unclearAttempts: 0,
+        });
+        replyText = templates[lang].scam_ask_knows_payee;
+      } else {
+        if (risk === 'medium') {
+          const prep = preparePayment(db, {
+            userId,
+            payee: session.pendingPayeeRaw!,
+            amount: session.pendingAmount!,
+            scamRisk: 'medium',
+          });
+          updateSession(sessionId, {
+            state: 'awaiting_guardian_approval',
+            currentTransactionId: prep.transactionId,
+          });
+          const guardian = db
+            .prepare<[string], { name: string }>(
+              'SELECT name FROM guardians WHERE user_id = ?'
+            )
+            .get(userId);
+          replyText = templates[lang].guardian_approval_needed(
+            guardian?.name || 'Ramesh'
+          );
+        } else {
+          const prep = preparePayment(db, {
+            userId,
+            payee: session.pendingPayeeRaw!,
+            amount: session.pendingAmount!,
+            scamRisk: 'low',
+          });
+          if (prep.decision.action === 'allow_with_confirmation') {
+            updateSession(sessionId, {
+              state: 'awaiting_confirmation',
+              currentTransactionId: prep.transactionId,
+              pendingPayeeName: prep.payee,
+              pendingAmount: prep.amount,
+              unclearAttempts: 0,
+            });
+            replyText = templates[lang].ask_confirmation(prep.payee, prep.amount);
+          } else if (prep.decision.action === 'need_guardian_approval') {
+            updateSession(sessionId, {
+              state: 'awaiting_guardian_approval',
+              currentTransactionId: prep.transactionId,
+            });
+            const guardian = db
+              .prepare<[string], { name: string }>(
+                'SELECT name FROM guardians WHERE user_id = ?'
+              )
+              .get(userId);
+            replyText = templates[lang].guardian_approval_needed(
+              guardian?.name || 'Ramesh'
+            );
+          } else {
+            resetSession(sessionId);
+            replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
+          }
+        }
+      }
+    } else if (session.scamInterviewStep === 'asked_knows_payee') {
+      const knowsPayee = userChoice === 'yes';
+      const unverifiedPayee = !knowsPayee;
+      const finalSignals = detectScamSignals(accumulatedText);
+      const finalRisk = combineRisk(finalSignals, {
+        toldToPayBySomeone: session.scamToldToPay,
+        unverifiedPayee,
+        payeeOnBlocklist: false,
+      });
+
+      if (finalRisk === 'high') {
+        recordTransaction(db, {
+          user_id: userId,
+          type: 'send_money',
+          amount: session.pendingAmount || 0,
+          currency: 'INR',
+          counterparty_type: session.isNewPayee ? 'new_personal' : 'contact',
+          counterparty_id: session.pendingPayeeRaw || 'unknown',
+          tier: 3,
+          risk_score: Math.max(finalSignals.score, 0.9),
+          decision: 'block',
+          status: 'failed',
+          paypal_ref: null,
+        });
+
+        writeAudit(db, {
+          user_id: userId,
+          kind: 'scam_payment_blocked',
+          payload: JSON.stringify({
+            payee: session.pendingPayeeName,
+            amount: session.pendingAmount,
+            reason: 'High scam risk detected in interview',
+            categories: finalSignals.categories,
+            score: finalSignals.score,
+            toldToPay: session.scamToldToPay,
+            knowsPayee,
+          }),
+        });
+
+        createNotification(db, {
+          user_id: userId,
+          kind: 'scam_alert',
+          message: `Scam alert: Payment of ₹${session.pendingAmount} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${finalSignals.categories.join(', ') || 'unverified payee with caller pressure'}).`,
+          spoken_text: `Scam chetavni: ${session.pendingPayeeName} ko ₹${session.pendingAmount} ka payment scam sandeh ke kaaran rok diya gaya.`,
+        });
+
+        replyText = templates[lang].scam_blocked_interruption;
+        resetSession(sessionId);
+      } else if (finalRisk === 'medium') {
+        const prep = preparePayment(db, {
+          userId,
+          payee: session.pendingPayeeRaw!,
+          amount: session.pendingAmount!,
+          scamRisk: 'medium',
+        });
+        updateSession(sessionId, {
+          state: 'awaiting_guardian_approval',
+          currentTransactionId: prep.transactionId,
+        });
+        const guardian = db
+          .prepare<[string], { name: string }>(
+            'SELECT name FROM guardians WHERE user_id = ?'
+          )
+          .get(userId);
+        replyText = templates[lang].guardian_approval_needed(
+          guardian?.name || 'Ramesh'
+        );
+      } else {
+        const prep = preparePayment(db, {
+          userId,
+          payee: session.pendingPayeeRaw!,
+          amount: session.pendingAmount!,
+          scamRisk: 'low',
+        });
+        if (prep.decision.action === 'allow_with_confirmation') {
+          updateSession(sessionId, {
+            state: 'awaiting_confirmation',
+            currentTransactionId: prep.transactionId,
+            pendingPayeeName: prep.payee,
+            pendingAmount: prep.amount,
+            unclearAttempts: 0,
+          });
+          replyText = templates[lang].ask_confirmation(prep.payee, prep.amount);
+        } else if (prep.decision.action === 'need_guardian_approval') {
+          updateSession(sessionId, {
+            state: 'awaiting_guardian_approval',
+            currentTransactionId: prep.transactionId,
+          });
+          const guardian = db
+            .prepare<[string], { name: string }>(
+              'SELECT name FROM guardians WHERE user_id = ?'
+            )
+            .get(userId);
+          replyText = templates[lang].guardian_approval_needed(
+            guardian?.name || 'Ramesh'
+          );
+        } else {
+          resetSession(sessionId);
+          replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
+        }
+      }
+    }
   } else {
     const intentResult = await parseIntent(text, contactAliases, 'idle');
 
@@ -111,36 +376,105 @@ export async function processConversation(
         replyText = templates[lang].clarify_recipient;
       } else {
         try {
-          const prep = preparePayment(db, {
-            userId,
-            payee: intentResult.recipient_alias,
-            amount: intentResult.amount,
-          });
+          const payee = intentResult.recipient_alias;
+          const amount = intentResult.amount;
+          const resolvedPayee = resolvePayee(db, userId, payee);
 
-          if (prep.decision.action === 'allow_with_confirmation') {
-            updateSession(sessionId, {
-              state: 'awaiting_confirmation',
-              currentTransactionId: prep.transactionId,
-              pendingPayeeName: prep.payee,
-              pendingAmount: prep.amount,
-              unclearAttempts: 0,
-            });
-            replyText = templates[lang].ask_confirmation(prep.payee, prep.amount);
-          } else if (prep.decision.action === 'need_guardian_approval') {
-            updateSession(sessionId, { state: 'awaiting_guardian_approval' });
-            const guardian = db
-              .prepare<[string], { name: string }>(
-                'SELECT name FROM guardians WHERE user_id = ?'
-              )
-              .get(userId);
-            replyText = templates[lang].guardian_approval_needed(
-              guardian?.name || 'Ramesh'
-            );
-          } else {
+          const blockCheck = db
+            .prepare<[string], { count: number }>(
+              'SELECT COUNT(*) AS count FROM blocklist WHERE LOWER(paypal_email) = ?'
+            )
+            .get(resolvedPayee.email.toLowerCase())?.count ?? 0;
+
+          if (blockCheck > 0) {
             resetSession(sessionId);
             replyText = templates[lang].payment_blocked(
-              prep.decision.spoken_reason
+              'This payee is blocked for your safety.'
             );
+            return {
+              replyText,
+              replyLanguage: lang,
+              state: 'idle',
+            };
+          }
+
+          const initialSignals = detectScamSignals(text);
+          const initialScamRisk = combineRisk(initialSignals);
+
+          const { context } = buildPaymentContext(
+            db,
+            user!,
+            resolvedPayee,
+            initialScamRisk
+          );
+
+          const preliminaryDecision = evaluatePayment(
+            {
+              amount,
+              currency: 'INR',
+              payeeType: resolvedPayee.payeeType,
+              payeeId: resolvedPayee.counterpartyId,
+              payeeName: resolvedPayee.displayName,
+            },
+            context
+          );
+
+          const needsInterview =
+            preliminaryDecision.tier >= 2 ||
+            initialScamRisk === 'medium' ||
+            initialScamRisk === 'high';
+
+          if (needsInterview) {
+            const isNew = resolvedPayee.payeeType !== 'trusted_contact';
+            updateSession(sessionId, {
+              state: 'awaiting_scam_answers',
+              scamInterviewStep: 'asked_told_to_pay',
+              pendingPayeeName: resolvedPayee.displayName,
+              pendingPayeeRaw: payee,
+              pendingAmount: amount,
+              isNewPayee: isNew,
+              accumulatedText: text,
+              unclearAttempts: 0,
+            });
+            replyText = templates[lang].scam_ask_told_to_pay;
+          } else {
+            const prep = preparePayment(db, {
+              userId,
+              payee,
+              amount,
+              scamRisk: 'low',
+            });
+
+            if (prep.decision.action === 'allow_with_confirmation') {
+              updateSession(sessionId, {
+                state: 'awaiting_confirmation',
+                currentTransactionId: prep.transactionId,
+                pendingPayeeName: prep.payee,
+                pendingAmount: prep.amount,
+                unclearAttempts: 0,
+              });
+              replyText = templates[lang].ask_confirmation(
+                prep.payee,
+                prep.amount
+              );
+            } else if (prep.decision.action === 'need_guardian_approval') {
+              updateSession(sessionId, {
+                state: 'awaiting_guardian_approval',
+              });
+              const guardian = db
+                .prepare<[string], { name: string }>(
+                  'SELECT name FROM guardians WHERE user_id = ?'
+                )
+                .get(userId);
+              replyText = templates[lang].guardian_approval_needed(
+                guardian?.name || 'Ramesh'
+              );
+            } else {
+              resetSession(sessionId);
+              replyText = templates[lang].payment_blocked(
+                prep.decision.spoken_reason
+              );
+            }
           }
         } catch (err) {
           replyText = `Error: ${(err as Error).message}`;

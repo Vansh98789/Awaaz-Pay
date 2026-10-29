@@ -14,6 +14,9 @@ export interface ConversationTemplates {
   check_balance: (balance: number) => string;
   unknown_intent: string;
   no_prior_reply: string;
+  scam_ask_told_to_pay: string;
+  scam_ask_knows_payee: string;
+  scam_blocked_interruption: string;
 }
 
 export const templates: Record<'hi' | 'en', ConversationTemplates> = {
@@ -43,6 +46,10 @@ export const templates: Record<'hi' | 'en', ConversationTemplates> = {
       `Aapke wallet mein ${balance.toLocaleString('en-IN')} rupaye hain.`,
     unknown_intent: 'Samajh nahi aaya. Kripya dobara bolein.',
     no_prior_reply: 'Dohraane ke liye koi pichla jawab nahi hai.',
+    scam_ask_told_to_pay: 'Kya kisi ne phone ya message par aapko ye payment karne ko kaha hai?',
+    scam_ask_knows_payee: 'Kya aap is insaan ko jaante hain?',
+    scam_blocked_interruption:
+      'Rukiye, yeh ek scam ho sakta hai. Asli bank ya police kabhi bhi is tarah phone par OTP ya paise nahi maangte. Main yeh payment rok rahi hoon. Kya main aapke parivaar ke kisi sadasya ko phone karoon?',
   },
   en: {
     welcome: 'Hello Meena. I am listening. How can I help you?',
@@ -70,5 +77,9 @@ export const templates: Record<'hi' | 'en', ConversationTemplates> = {
       `Your wallet balance is ₹${balance.toLocaleString('en-IN')}.`,
     unknown_intent: 'Sorry, I did not catch that. Please say it again.',
     no_prior_reply: 'There is no previous reply to repeat.',
+    scam_ask_told_to_pay: 'Did someone ask you over a phone call or message to make this payment?',
+    scam_ask_knows_payee: 'Do you know this person?',
+    scam_blocked_interruption:
+      'Wait, this may be a scam. Real banks or police never ask for OTPs or money like this. I am stopping this payment. Would you like me to call a family member?',
   },
 };

@@ -59,7 +59,11 @@ export function addLedgerEntry(
 
 export function recordTransaction(
   db: Database.Database,
-  tx: Omit<Transaction, 'id' | 'created_at'> & { id?: string; created_at?: string }
+  tx: Omit<Transaction, 'id' | 'created_at' | 'paypal_ref'> & {
+    id?: string;
+    created_at?: string;
+    paypal_ref?: string | null;
+  }
 ): Transaction {
   const record: Transaction = {
     id: tx.id || crypto.randomUUID(),

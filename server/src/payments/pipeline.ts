@@ -103,6 +103,7 @@ export function preparePayment(
     risk_score: scamRisk === 'high' ? 0.9 : scamRisk === 'medium' ? 0.5 : 0.1,
     decision: decision.action,
     status,
+    paypal_ref: null,
   });
 
   writeAudit(db, {

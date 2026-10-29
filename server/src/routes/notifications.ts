@@ -21,7 +21,7 @@ export function createNotificationsRouter(db: Database.Database): Router {
 
   router.post('/:id/delivered', (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       markNotificationDelivered(db, id);
       res.status(200).json({ success: true, id });
     } catch (err) {
