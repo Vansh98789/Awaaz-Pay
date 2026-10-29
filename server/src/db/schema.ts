@@ -131,4 +131,11 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_ledger_user ON wallet_ledger(user_id);
     CREATE INDEX IF NOT EXISTS idx_tx_user ON transactions(user_id);
   `);
+
+  try {
+    db.prepare('ALTER TABLE approvals ADD COLUMN created_at TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE approvals ADD COLUMN expires_at TEXT').run();
+  } catch {}
 }

@@ -4,6 +4,8 @@ import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from './hooks/useSpeechSynthesis';
 import { GuardianApprovePage } from './pages/GuardianApprovePage';
 import { OnboardingWizard } from './pages/OnboardingWizard';
+import { MerchantDemoPage } from './pages/MerchantDemoPage';
+import { QRScannerModal } from './components/QRScannerModal';
 
 interface TranscriptEntry {
   id: string;
@@ -26,7 +28,7 @@ interface VoiceChallengeState {
 
 export const App: React.FC = () => {
   const [currentRoute, setCurrentRoute] = useState<{
-    path: 'wallet' | 'approve' | 'onboarding';
+    path: 'wallet' | 'approve' | 'onboarding' | 'merchant';
     token?: string;
   }>(() => {
     const path = typeof window !== 'undefined' ? window.location.pathname : '/';
@@ -40,6 +42,9 @@ export const App: React.FC = () => {
     if (path === '/onboarding' || hash === '#/onboarding' || hash === '#onboarding') {
       return { path: 'onboarding' };
     }
+    if (path === '/merchant' || hash === '#/merchant' || hash === '#merchant') {
+      return { path: 'merchant' };
+    }
     return { path: 'wallet' };
   });
 
@@ -49,6 +54,7 @@ export const App: React.FC = () => {
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
   const [voiceChallenge, setVoiceChallenge] = useState<VoiceChallengeState>({ isOpen: false });
   const [pendingApprovalTxId, setPendingApprovalTxId] = useState<string | null>(null);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   useEffect(() => {
     const handleLocationChange = () => {
@@ -60,6 +66,8 @@ export const App: React.FC = () => {
         setCurrentRoute({ path: 'approve', token: hash.replace(/^#(|\/)approve\//, '') });
       } else if (path === '/onboarding' || hash === '#/onboarding' || hash === '#onboarding') {
         setCurrentRoute({ path: 'onboarding' });
+      } else if (path === '/merchant' || hash === '#/merchant' || hash === '#merchant') {
+        setCurrentRoute({ path: 'merchant' });
       } else {
         setCurrentRoute({ path: 'wallet' });
       }
@@ -476,11 +484,28 @@ export const App: React.FC = () => {
     return <OnboardingWizard />;
   }
 
+  if (currentRoute.path === 'merchant') {
+    return <MerchantDemoPage />;
+  }
+
+  const handleScanSuccess = (qrData: string) => {
+    setIsScannerOpen(false);
+    handleSpeechResult(qrData);
+  };
+
   return (
     <div className="app-container">
       <header className="app-header">
         <h1 className="app-title">Awaaz Pay</h1>
         <div className="header-controls">
+          <a
+            href="/merchant"
+            className="action-pill-btn"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+            aria-label="Open Ravi Cabs merchant portal"
+          >
+            🚖 Merchant
+          </a>
           <a
             href="/onboarding"
             className="action-pill-btn"
@@ -608,6 +633,30 @@ export const App: React.FC = () => {
             {lang === 'hi-IN' ? 'Taiyaar — Mic dabaiye' : 'Ready — Tap mic to talk'}
           </span>
         )}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.75rem' }}>
+        <button
+          type="button"
+          className="action-pill-btn"
+          onClick={() => setIsScannerOpen(true)}
+          style={{
+            padding: '0.55rem 1.15rem',
+            fontSize: '0.95rem',
+            fontWeight: 700,
+            backgroundColor: 'var(--bg-card)',
+            borderColor: 'var(--accent-cyan)',
+            color: 'var(--text-primary)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            borderRadius: '9999px',
+          }}
+          aria-label="Scan PayPal Invoice QR Code with Camera"
+        >
+          📷 {lang === 'hi-IN' ? 'Invoice QR Scan Karein' : 'Scan Invoice QR'}
+        </button>
       </div>
 
       <main className="mic-hero-section">
@@ -757,6 +806,14 @@ export const App: React.FC = () => {
           ))}
         </div>
       </section>
+
+      <QRScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onScanSuccess={handleScanSuccess}
+        speak={speak}
+        lang={lang}
+      />
     </div>
   );
 };

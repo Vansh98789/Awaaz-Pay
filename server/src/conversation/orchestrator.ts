@@ -8,7 +8,11 @@ import {
   writeAudit,
   recordTransaction,
   getApprovalByTransactionId,
+  getInvoiceByPaypalId,
+  getInvoiceById,
+  updateInvoiceStatus,
 } from '../db/repository.js';
+import { parseInvoiceQr } from '../payments/qrParser.js';
 import { preparePayment, confirmPayment } from '../payments/pipeline.js';
 import { resolvePayee, buildPaymentContext } from '../payments/context.js';
 import { evaluatePayment } from '../rules/engine.js';
@@ -59,13 +63,23 @@ export async function processConversation(
       'awaiting_confirmation'
     );
 
-    if (intentResult.intent === 'confirm_yes') {
+    const mentionsNumber = /\b\d+\b/.test(text) || intentResult.amount !== undefined;
+
+    if (session.isInvoicePayment && mentionsNumber && intentResult.intent !== 'confirm_yes') {
+      replyText =
+        lang === 'hi'
+          ? `Yeh payment invoice se hai. Amount ₹${session.pendingAmount} badla nahi ja sakta. Bhejne ke liye haan bolein.`
+          : `The amount comes from the invoice and cannot be changed by voice. Say yes to pay.`;
+    } else if (intentResult.intent === 'confirm_yes') {
       const confirmRes = await confirmPayment(db, {
         transactionId: session.currentTransactionId!,
         userConfirmed: true,
       });
 
       if (confirmRes.status === 'completed') {
+        if (session.invoiceId) {
+          updateInvoiceStatus(db, session.invoiceId, 'PAID');
+        }
         replyText = templates[lang].payment_success(
           session.pendingPayeeName || 'Payee',
           session.pendingAmount || 0,
@@ -446,7 +460,57 @@ export async function processConversation(
       }
     }
   } else {
-    const intentResult = await parseIntent(text, contactAliases, 'idle');
+    const parsedInvoiceId = parseInvoiceQr(text);
+    const invoice = parsedInvoiceId
+      ? getInvoiceByPaypalId(db, parsedInvoiceId) ||
+        getInvoiceById(db, parsedInvoiceId)
+      : null;
+
+    if (invoice) {
+      const prep = preparePayment(db, {
+        userId,
+        payee: invoice.merchant_name,
+        amount: invoice.amount,
+        scamRisk: 'low',
+      });
+
+      if (prep.decision.action === 'allow_with_confirmation') {
+        updateSession(sessionId, {
+          state: 'awaiting_confirmation',
+          currentTransactionId: prep.transactionId,
+          pendingPayeeName: invoice.merchant_name,
+          pendingAmount: invoice.amount,
+          isInvoicePayment: true,
+          invoiceId: invoice.paypal_invoice_id,
+          unclearAttempts: 0,
+        });
+        replyText =
+          lang === 'hi'
+            ? `${invoice.merchant_name}, ${invoice.amount} rupaye. Kya main bhej doon?`
+            : `${invoice.merchant_name}, ${invoice.amount} rupees. Shall I pay?`;
+      } else if (prep.decision.action === 'need_guardian_approval') {
+        updateSession(sessionId, {
+          state: 'awaiting_guardian_approval',
+          currentTransactionId: prep.transactionId,
+          pendingPayeeName: invoice.merchant_name,
+          pendingAmount: invoice.amount,
+          isInvoicePayment: true,
+          invoiceId: invoice.paypal_invoice_id,
+        });
+        const guardian = db
+          .prepare<[string], { name: string }>(
+            'SELECT name FROM guardians WHERE user_id = ?'
+          )
+          .get(userId);
+        replyText = templates[lang].guardian_approval_needed(
+          guardian?.name || 'Ramesh'
+        );
+      } else {
+        resetSession(sessionId);
+        replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
+      }
+    } else {
+      const intentResult = await parseIntent(text, contactAliases, 'idle');
 
     if (intentResult.intent === 'repeat') {
       replyText = session.lastReply
@@ -574,6 +638,7 @@ export async function processConversation(
       }
     } else {
       replyText = templates[lang].unknown_intent;
+    }
     }
   }
 

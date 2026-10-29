@@ -14,6 +14,7 @@ import { createConverseRouter } from './routes/converse.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createApprovalsRouter } from './routes/approvals.js';
 import { createContactsRouter, createOnboardingRouter } from './routes/contacts.js';
+import { createMerchantRouter } from './routes/merchant.js';
 import { requireAuth } from './auth/middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,6 +50,8 @@ export function createApp(db?: Database.Database): Express {
   app.use('/api/approvals', createApprovalsRouter(database));
   app.use('/api/contacts', createContactsRouter(database));
   app.use('/api/onboarding', createOnboardingRouter(database));
+  app.use('/api/merchant', createMerchantRouter(database));
+  app.use('/api', createMerchantRouter(database));
   app.use('/api/family', createFamilyRouter(database));
   app.use('/api/webhooks', createWebhooksRouter(database));
   app.use('/api/notifications', createNotificationsRouter(database));

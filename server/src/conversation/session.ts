@@ -24,6 +24,10 @@ export interface SessionData {
   isNewPayee?: boolean;
   accumulatedText?: string;
   pendingPayeeRaw?: string;
+
+  // Task 16 invoice fields
+  isInvoicePayment?: boolean;
+  invoiceId?: string;
 }
 
 const sessionStore = new Map<string, SessionData>();

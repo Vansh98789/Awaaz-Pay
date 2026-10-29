@@ -344,6 +344,28 @@ export async function confirmPayment(
     }
 
     updateTransactionStatus(db, tx.id, 'completed', batchId);
+
+    // If payment was made to a merchant, update invoice status in registry & PayPal
+    if (tx.counterparty_type === 'merchant') {
+      try {
+        const inv = db
+          .prepare<[string, number], { id: string; paypal_invoice_id: string; currency: string }>(
+            "SELECT id, paypal_invoice_id, currency FROM invoices WHERE merchant_id = ? AND amount = ? AND status != 'PAID' ORDER BY rowid DESC LIMIT 1"
+          )
+          .get(tx.counterparty_id, tx.amount);
+        if (inv) {
+          db.prepare("UPDATE invoices SET status = 'PAID' WHERE id = ?").run(inv.id);
+          import('../paypal/invoices.js')
+            .then(({ recordInvoicePayment }) => {
+              recordInvoicePayment(inv.paypal_invoice_id, tx.amount, inv.currency).catch(() => {});
+            })
+            .catch(() => {});
+        }
+      } catch {
+        // Ignored
+      }
+    }
+
     writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_completed',

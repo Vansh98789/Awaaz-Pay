@@ -4,6 +4,7 @@ import type {
   AuditEvent,
   Contact,
   Guardian,
+  Invoice,
   LedgerEntry,
   Merchant,
   Transaction,
@@ -415,4 +416,93 @@ export function getContactById(
 
 export function deleteContact(db: Database.Database, id: string): void {
   db.prepare('DELETE FROM contacts WHERE id = ?').run(id);
+}
+
+export function createInvoiceRecord(
+  db: Database.Database,
+  invoice: Omit<Invoice, 'id'> & { id?: string }
+): Invoice {
+  const record: Invoice = {
+    id: invoice.id || crypto.randomUUID(),
+    merchant_id: invoice.merchant_id,
+    paypal_invoice_id: invoice.paypal_invoice_id,
+    amount: invoice.amount,
+    currency: invoice.currency || 'INR',
+    status: invoice.status || 'SENT',
+  };
+
+  const stmt = db.prepare(`
+    INSERT INTO invoices (id, merchant_id, paypal_invoice_id, amount, currency, status)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      amount = excluded.amount
+  `);
+
+  stmt.run(
+    record.id,
+    record.merchant_id,
+    record.paypal_invoice_id,
+    record.amount,
+    record.currency,
+    record.status
+  );
+
+  return record;
+}
+
+export interface InvoiceWithMerchant extends Invoice {
+  merchant_name: string;
+  merchant_email: string;
+  merchant_verified: number;
+}
+
+export function getInvoiceByPaypalId(
+  db: Database.Database,
+  paypalInvoiceId: string
+): InvoiceWithMerchant | null {
+  const stmt = db.prepare<[string], InvoiceWithMerchant>(`
+    SELECT i.*, m.name as merchant_name, m.paypal_email as merchant_email, m.verified as merchant_verified
+    FROM invoices i
+    JOIN merchants m ON i.merchant_id = m.id
+    WHERE i.paypal_invoice_id = ?
+    LIMIT 1
+  `);
+  return stmt.get(paypalInvoiceId) ?? null;
+}
+
+export function getInvoiceById(
+  db: Database.Database,
+  id: string
+): InvoiceWithMerchant | null {
+  const stmt = db.prepare<[string], InvoiceWithMerchant>(`
+    SELECT i.*, m.name as merchant_name, m.paypal_email as merchant_email, m.verified as merchant_verified
+    FROM invoices i
+    JOIN merchants m ON i.merchant_id = m.id
+    WHERE i.id = ?
+    LIMIT 1
+  `);
+  return stmt.get(id) ?? null;
+}
+
+export function updateInvoiceStatus(
+  db: Database.Database,
+  idOrPaypalId: string,
+  status: string
+): void {
+  db.prepare(`
+    UPDATE invoices
+    SET status = ?
+    WHERE id = ? OR paypal_invoice_id = ?
+  `).run(status, idOrPaypalId, idOrPaypalId);
+}
+
+export function getMerchantById(
+  db: Database.Database,
+  id: string
+): Merchant | null {
+  const stmt = db.prepare<[string], Merchant>(
+    'SELECT * FROM merchants WHERE id = ?'
+  );
+  return stmt.get(id) ?? null;
 }

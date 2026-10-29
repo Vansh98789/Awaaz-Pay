@@ -30,9 +30,12 @@ export async function createInvoice(input: InvoiceInput): Promise<InvoiceRespons
   });
 }
 
-export async function sendInvoice(invoiceId: string): Promise<void> {
+export async function sendInvoice(
+  invoiceId: string,
+  sendToRecipient = false,
+): Promise<void> {
   await ppRequest<void>('POST', `/v2/invoicing/invoices/${invoiceId}/send`, {
-    body: { send_to_recipient: true },
+    body: { send_to_recipient: sendToRecipient },
   });
 }
 
