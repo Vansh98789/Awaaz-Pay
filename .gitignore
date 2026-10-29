@@ -33,3 +33,7 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Local cache
+llm_demo_cache.json
+server/llm_demo_cache.json

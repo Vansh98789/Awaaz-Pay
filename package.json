@@ -14,6 +14,7 @@
     "start": "node server/dist/index.js",
     "seed": "npm run seed --workspace=server",
     "test": "npm run test --workspace=server",
+    "paypal:check": "npm run paypal:check --workspace=server",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

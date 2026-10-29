@@ -10,7 +10,8 @@
     "seed": "tsx src/db/seed.ts",
     "test": "vitest run",
     "llm:ping": "tsx src/llm/ping.ts",
-    "eval:intent": "tsx src/intent/eval.ts"
+    "eval:intent": "tsx src/intent/eval.ts",
+    "paypal:check": "tsx src/paypal/check.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",
