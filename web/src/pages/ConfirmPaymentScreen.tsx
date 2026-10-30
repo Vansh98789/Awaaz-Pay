@@ -4,7 +4,6 @@ import {
   DotWordmark,
   Headline,
   BodyText,
-  BigButton,
   StatusBanner,
   BrailleCells,
   DotRing,
@@ -16,7 +15,7 @@ interface ConfirmPaymentProps {
   amount: number;
   currency?: string;
   contextSentence?: string; // e.g. "To Ravi Cabs, a verified merchant."
-  warningText?: string;     // e.g. "New payee. Limit 500 rupaye."
+  warningText?: string;     // e.g. "New payee. Limit $500."
   isBlocked?: boolean;
   blockedReason?: string;
   isProcessing?: boolean;
@@ -27,8 +26,6 @@ interface ConfirmPaymentProps {
   statusMessage?: string;
   transactionId?: string;
   paypalBatchId?: string;
-  onConfirm: () => void;
-  onCancel: () => void;
   speak: (text: string) => void;
   lang?: 'hi-IN' | 'en-IN';
   isListening?: boolean;
@@ -38,7 +35,7 @@ interface ConfirmPaymentProps {
 export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
   payeeName,
   amount,
-  currency = 'rupees',
+  currency = 'US dollars',
   contextSentence = 'To a trusted contact.',
   warningText,
   isBlocked = false,
@@ -51,14 +48,11 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
   statusMessage,
   transactionId,
   paypalBatchId,
-  onConfirm,
-  onCancel,
   speak,
   lang = 'en-IN',
   isListening = false,
   onToggleMic,
 }) => {
-  const cancelBtnRef = useRef<HTMLButtonElement>(null);
   const announcedRef = useRef(false);
 
   // Announce automatically on mount: payee, amount, then "Shall I pay?"
@@ -84,16 +78,14 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
         : `${payeeName}, ${spokenAmount}. ${contextSentence} Shall I pay? Say yes to confirm or no to cancel.`;
     speak(announcement);
 
-    // Cancel is easy to reach; Yes is never default focus
-    cancelBtnRef.current?.focus();
   }, [payeeName, amount, currency, contextSentence, isBlocked, blockedReason, lang, speak]);
 
   if (isSuccess) {
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const receiptText =
       lang === 'hi-IN'
-        ? `PayPal Sandbox test payment safal raha. ${amount} rupaye ${payeeName} ko bhej diye gaye. Asli paise nahi bheje gaye.`
-        : `PayPal Sandbox test payment completed. Sent ₹${amount} to ${payeeName}. No real money was moved.`;
+        ? `PayPal Sandbox test payment safal raha. ${amount.toFixed(2)} US dollars ${payeeName} ko bhej diye gaye. Asli paise nahi bheje gaye.`
+        : `PayPal Sandbox test payment completed. Sent $${amount.toFixed(2)} to ${payeeName}. No real money was moved.`;
 
     return (
       <Page
@@ -102,20 +94,6 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
             <DotWordmark size={140} />
             <Headline level={1}>{lang === 'hi-IN' ? 'पेमेंट सफल' : 'Payment Sent'}</Headline>
           </>
-        }
-        footerContent={
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
-            <BigButton variant="primary" onClick={onCancel}>
-              {lang === 'hi-IN' ? 'Theek hai (Done)' : 'Done'}
-            </BigButton>
-            <BigButton
-              variant="secondary"
-              onClick={() => speak(receiptText)}
-              aria-label="Read receipt out loud"
-            >
-              🔊 {lang === 'hi-IN' ? 'रसीद सुनें (Read Receipt)' : 'Read Receipt'}
-            </BigButton>
-          </div>
         }
       >
         <StatusBanner variant="success" label="PayPal Sandbox test completed">
@@ -145,7 +123,7 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
                 lineHeight: 1,
               }}
             >
-              ₹{amount}
+              ${amount.toFixed(2)}
             </div>
             <BodyText muted size="large">
               {lang === 'hi-IN' ? `${payeeName} को भेजा गया` : `Sent to ${payeeName}`}
@@ -188,7 +166,6 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
     return (
       <Page
         headerContent={<><DotWordmark size={140} /><Headline level={1}>{isApprovalPending ? 'Guardian approval required' : 'Payment not confirmed yet'}</Headline></>}
-        footerContent={<BigButton variant="secondary" onClick={onCancel}>Done</BigButton>}
       >
         <StatusBanner variant="warning" label={isApprovalPending ? 'No payout sent yet' : 'PayPal Sandbox status pending'}>
           {statusMessage || (isApprovalPending
@@ -206,10 +183,9 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
     return (
       <Page
         headerContent={<><DotWordmark size={140} /><Headline level={1}>Payment failed</Headline></>}
-        footerContent={<BigButton variant="secondary" onClick={onCancel}>Done</BigButton>}
       >
         <StatusBanner variant="danger" label="No successful PayPal transfer">
-          {statusMessage || 'PayPal did not confirm this payment. Any reserved wallet amount was returned.'}
+          {statusMessage || 'PayPal did not confirm this payment. Check PayPal activity before retrying.'}
         </StatusBanner>
         <BodyText size="large">This is a sandbox test. No real money was moved.</BodyText>
         {transactionId && <BodyText muted>Transaction ID: {transactionId}</BodyText>}
@@ -221,11 +197,6 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
     return (
       <Page
         headerContent={<DotWordmark size={140} />}
-        footerContent={
-          <BigButton variant="secondary" onClick={onCancel} ref={cancelBtnRef}>
-            {lang === 'hi-IN' ? 'Wapas jayein (Back)' : 'Go Back'}
-          </BigButton>
-        }
       >
         <StatusBanner variant="danger" label="Blocked">
           {blockedReason || 'Payment was blocked due to high security or scam risk.'}
@@ -248,28 +219,6 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
           <BodyText muted>{contextSentence}</BodyText>
         </>
       }
-      footerContent={
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
-          {/* Yes is never default focus; Cancel button has initial focus */}
-          <BigButton
-            variant="primary"
-            onClick={onConfirm}
-            loading={isProcessing}
-            loadingText={lang === 'hi-IN' ? 'Payment ho raha hai...' : 'Processing payment...'}
-          >
-            {lang === 'hi-IN' ? `Haan, ${amount} rupaye bhej do` : `Yes, pay ₹${amount}`}
-          </BigButton>
-
-          <BigButton
-            variant="secondary"
-            onClick={onCancel}
-            ref={cancelBtnRef}
-            disabled={isProcessing}
-          >
-            {lang === 'hi-IN' ? 'Nahi, cancel karo' : 'No, cancel'}
-          </BigButton>
-        </div>
-      }
     >
       <StatusBanner variant="warning" label={lang === 'hi-IN' ? 'Sandbox test mode' : 'Sandbox test mode'}>
         {lang === 'hi-IN'
@@ -290,7 +239,7 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
         }}
         aria-label={`${amount} ${currency}`}
       >
-        ₹{amount}
+        ${amount.toFixed(2)}
       </div>
 
       {/* Voice Status Indicator for Hands-Free response */}
@@ -341,7 +290,7 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
               : 'Listening: say "Yes" or "No"'
             : lang === 'hi-IN'
               ? 'माइक दबाकर बोलें या नीचे बटन चुनें'
-              : 'Tap mic or say "Yes" / "No"'}
+              : 'Say "Yes" to confirm, "No" to cancel, or "repeat" to hear the payment details again.'}
         </div>
       </div>
 

@@ -1,8 +1,7 @@
 import type Database from 'better-sqlite3';
-import type { Transaction, LedgerEntry } from '../db/types.js';
+import type { Transaction } from '../db/types.js';
 
 export interface SevenDaySummaryFacts {
-  moneyIn: number;
   moneyOut: number;
   paymentCount: number;
   largestPayment: number;
@@ -24,16 +23,7 @@ export function getSevenDaySummary(
 ): SevenDaySummaryFacts {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // 1. Money In from ledger (positive deltas)
-  const ledgerEntries = db
-    .prepare<[string, string], LedgerEntry>(
-      'SELECT * FROM wallet_ledger WHERE user_id = ? AND created_at >= ? AND delta > 0 ORDER BY created_at DESC'
-    )
-    .all(userId, sevenDaysAgo);
-
-  const moneyIn = ledgerEntries.reduce((sum, entry) => sum + entry.delta, 0);
-
-  // 2. Money Out from completed transactions
+  // Completed PayPal payouts are the source of sent-payment history.
   const txEntries = db
     .prepare<[string, string], Transaction>(
       "SELECT * FROM transactions WHERE user_id = ? AND created_at >= ? AND status = 'completed' ORDER BY created_at DESC, rowid DESC"
@@ -70,16 +60,15 @@ export function getSevenDaySummary(
   // 4. Deterministic spoken summaries (facts built in code first; never invent numbers)
   const hiSummary =
     paymentCount > 0
-      ? `Is hafte aapne ${paymentCount} payment kiye. Kul ₹${moneyOut.toLocaleString('en-IN')} bheje gaye aur ₹${moneyIn.toLocaleString('en-IN')} aaye. Sabse bada payment ₹${largestPayment.toLocaleString('en-IN')} ka tha.`
-      : `Is hafte koi payment nahi kiya gaya. Kul ₹${moneyIn.toLocaleString('en-IN')} wallet mein aaye.`;
+      ? `Is hafte aapne ${paymentCount} PayPal payment kiye. Kul ${moneyOut.toFixed(2)} US dollars bheje gaye. Sabse bada payment ${largestPayment.toFixed(2)} dollars ka tha.`
+      : 'Is hafte koi PayPal payment complete nahi hua.';
 
   const enSummary =
     paymentCount > 0
-      ? `In the past 7 days, you made ${paymentCount} payments. You sent ₹${moneyOut.toLocaleString('en-IN')} and received ₹${moneyIn.toLocaleString('en-IN')}. The largest payment was ₹${largestPayment.toLocaleString('en-IN')}.`
-      : `No payments were sent this week. You received ₹${moneyIn.toLocaleString('en-IN')} in your wallet.`;
+      ? `In the past 7 days, you completed ${paymentCount} PayPal payouts totaling $${moneyOut.toFixed(2)}. The largest payment was $${largestPayment.toFixed(2)}.`
+      : 'No PayPal payouts were completed this week.';
 
   return {
-    moneyIn,
     moneyOut,
     paymentCount,
     largestPayment,
@@ -142,8 +131,8 @@ export function explainRecentPayment(
   const fee = 0;
   const amount = tx.amount;
 
-  const hi = `Aakhri payment ${payee} ko ₹${amount.toLocaleString('en-IN')} ka kiya gaya tha. Isme koi fee nahi lagi. Paisa turant pahunch gaya. Dhyan rahe, yeh payment wapas nahi ho sakta.`;
-  const en = `Your most recent payment was ₹${amount.toLocaleString('en-IN')} to ${payee}. There was zero fee, and money arrived immediately. Note that once sent, it cannot be reversed.`;
+  const hi = `Aakhri payment ${payee} ko ${amount.toFixed(2)} US dollars ka kiya gaya tha. Isme koi fee nahi lagi. PayPal ne payment complete ki. Dhyan rahe, yeh payment wapas nahi ho sakta.`;
+  const en = `Your most recent payment was $${amount.toFixed(2)} to ${payee}. There was zero fee, and PayPal marked it complete. Note that once sent, it may not be reversible.`;
 
   return {
     found: true,
@@ -165,27 +154,8 @@ export function getLastSenderAmount(
 ): { found: boolean; amount?: number; personName: string; spokenText: { hi: string; en: string } } {
   const pattern = `%${personName.toLowerCase()}%`;
 
-  // Check ledger for funding from that person
-  const ledgerMatch = db
-    .prepare<[string, string, string], LedgerEntry>(
-      'SELECT * FROM wallet_ledger WHERE user_id = ? AND delta > 0 AND (LOWER(reason) LIKE ? OR LOWER(ref) LIKE ?) ORDER BY created_at DESC LIMIT 1'
-    )
-    .get(userId, pattern, pattern);
-
-  if (ledgerMatch) {
-    const amount = ledgerMatch.delta;
-    return {
-      found: true,
-      amount,
-      personName,
-      spokenText: {
-        hi: `${personName} ne aakhri baar ₹${amount.toLocaleString('en-IN')} bheje the.`,
-        en: `${personName} sent ₹${amount.toLocaleString('en-IN')} last time.`,
-      },
-    };
-  }
-
-  // Check transactions if money was sent or received with that counterparty
+  // Only completed PayPal payouts are payment history; old local wallet entries
+  // are not part of the PayPal account balance or transfer history.
   const txMatch = db
     .prepare<[string, string], Transaction>(
       'SELECT * FROM transactions WHERE user_id = ? AND (LOWER(counterparty_id) LIKE ?) ORDER BY created_at DESC LIMIT 1'
@@ -199,8 +169,8 @@ export function getLastSenderAmount(
       amount,
       personName,
       spokenText: {
-        hi: `${personName} ka aakhri transaction ₹${amount.toLocaleString('en-IN')} ka tha.`,
-        en: `Last transaction for ${personName} was ₹${amount.toLocaleString('en-IN')}.`,
+        hi: `${personName} ka aakhri transaction ${amount.toFixed(2)} US dollars ka tha.`,
+        en: `Last transaction for ${personName} was $${amount.toFixed(2)}.`,
       },
     };
   }

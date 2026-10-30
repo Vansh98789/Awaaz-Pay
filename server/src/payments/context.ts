@@ -103,14 +103,17 @@ export function buildPaymentContext(
   const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
 
   const todayTxList = db
-    .prepare<[string, string], { amount: number; counterparty_id: string; counterparty_type: string; created_at: string }>(
-      `SELECT amount, counterparty_id, counterparty_type, created_at 
+    .prepare<[string, string], { amount: number; currency: string; counterparty_id: string; counterparty_type: string; created_at: string }>(
+      `SELECT amount, currency, counterparty_id, counterparty_type, created_at
        FROM transactions 
        WHERE user_id = ? AND status IN ('completed', 'processing', 'confirmed', 'pending_confirmation') AND created_at >= ?`
     )
     .all(user.id, startOfDay);
 
-  const todayTotalAmount = todayTxList.reduce((sum, tx) => sum + tx.amount, 0);
+  const todayTotalAmount = todayTxList.reduce(
+    (sum, tx) => sum + (tx.currency === 'USD' ? tx.amount : tx.amount * 0.012),
+    0
+  );
 
   const newPayeesToday = new Set<string>();
   let todayNewPayeesTotalAmount = 0;
@@ -119,10 +122,10 @@ export function buildPaymentContext(
   for (const tx of todayTxList) {
     if (tx.counterparty_type !== 'contact') {
       newPayeesToday.add(tx.counterparty_id);
-      todayNewPayeesTotalAmount += tx.amount;
+      todayNewPayeesTotalAmount += tx.currency === 'USD' ? tx.amount : tx.amount * 0.012;
     }
     if (tx.counterparty_id === payee.counterpartyId) {
-      cumulativeAmountToThisPayee += tx.amount;
+      cumulativeAmountToThisPayee += tx.currency === 'USD' ? tx.amount : tx.amount * 0.012;
     }
   }
 
@@ -140,12 +143,12 @@ export function buildPaymentContext(
     .all(user.id, tenMinutesAgo);
 
   const pastAmounts = db
-    .prepare<[string], { amount: number }>(
-      `SELECT amount FROM transactions 
+    .prepare<[string], { amount: number; currency: string }>(
+      `SELECT amount, currency FROM transactions
        WHERE user_id = ? AND status = 'completed'`
     )
     .all(user.id)
-    .map((r) => r.amount);
+    .map((r) => r.currency === 'USD' ? r.amount : r.amount * 0.012);
 
   const medianPastPaymentAmount = calculateMedian(pastAmounts);
 

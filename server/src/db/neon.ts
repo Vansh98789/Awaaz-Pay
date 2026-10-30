@@ -49,7 +49,7 @@ export async function initNeonDb(): Promise<boolean> {
         user_id VARCHAR(64) NOT NULL,
         type VARCHAR(32) NOT NULL,
         amount NUMERIC NOT NULL,
-        currency VARCHAR(8) DEFAULT 'INR',
+        currency VARCHAR(8) DEFAULT 'USD',
         counterparty_type VARCHAR(32),
         counterparty_id VARCHAR(128),
         tier INT DEFAULT 1,
@@ -116,7 +116,7 @@ export async function syncTransactionToNeon(tx: {
         counterparty_type, counterparty_id, tier,
         risk_score, decision, status, paypal_ref, created_at
       ) VALUES (
-        ${tx.id}, ${tx.user_id}, ${tx.type}, ${tx.amount}, ${tx.currency || 'INR'},
+        ${tx.id}, ${tx.user_id}, ${tx.type}, ${tx.amount}, ${tx.currency || 'USD'},
         ${tx.counterparty_type || null}, ${tx.counterparty_id || null}, ${tx.tier ?? 1},
         ${tx.risk_score ?? 0}, ${tx.decision || 'allow'}, ${tx.status || 'completed'},
         ${tx.paypal_ref || null}, ${tx.created_at || new Date().toISOString()}

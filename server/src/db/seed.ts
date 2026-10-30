@@ -31,7 +31,7 @@ export function seedDemoData(db: Database.Database): SeedResult {
     name: 'Meena',
     language: 'hi',
     limits: JSON.stringify({
-      daily_total: 1000,
+      daily_total: 5000,
       per_transaction_new_payee: 500,
       max_new_payees_per_day: 2,
     }),
@@ -63,6 +63,17 @@ export function seedDemoData(db: Database.Database): SeedResult {
     alias: 'sabzi_wala',
     display_name: 'Sabzi wala',
     paypal_email: 'sabzi-sandbox@example.com',
+    status: 'active',
+    added_by: user.id,
+    activated_at: pastActiveDate,
+  });
+
+  upsertContact(db, {
+    id: 'contact_doodh_wala',
+    user_id: user.id,
+    alias: 'doodh_wala',
+    display_name: 'Milk vendor',
+    paypal_email: 'milk-vendor-sandbox@example.com',
     status: 'active',
     added_by: user.id,
     activated_at: pastActiveDate,
@@ -114,7 +125,6 @@ if (isDirectRun) {
     console.log(`  - Guardian: ${result.guardianId} (Ramesh)`);
     console.log(`  - Contacts: ${result.contactIds.join(', ')}`);
     console.log(`  - Merchant: ${result.merchantId} (Ravi Cabs)`);
-    console.log(`  - Balance: ₹${result.balance}`);
     process.exit(0);
   } catch (err) {
     console.error('[Seed] Failed to seed database:', err);

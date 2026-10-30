@@ -13,6 +13,7 @@ import { createPaymentsRouter } from './routes/payments.js';
 import { createConverseRouter } from './routes/converse.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createApprovalsRouter } from './routes/approvals.js';
+import { createAgentRouter } from './routes/agent.js';
 import { createContactsRouter, createOnboardingRouter } from './routes/contacts.js';
 import { createMerchantRouter } from './routes/merchant.js';
 import { requireAuth } from './auth/middleware.js';
@@ -47,6 +48,7 @@ export function createApp(db?: Database.Database): Express {
   });
 
   app.use('/api/auth', createAuthRouter(database));
+  app.use('/api/agent', createAgentRouter());
   app.use('/api/approvals', createApprovalsRouter(database));
   app.use('/api/contacts', createContactsRouter(database));
   app.use('/api/onboarding', createOnboardingRouter(database));

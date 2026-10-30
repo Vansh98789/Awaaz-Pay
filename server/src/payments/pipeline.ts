@@ -4,16 +4,15 @@ import { evaluatePayment } from '../rules/engine.js';
 import type { Decision, PaymentRequest, ScamRiskLevel } from '../rules/types.js';
 import { createPayoutBatch, getPayoutBatch } from '../paypal/index.js';
 import {
-  addLedgerEntry,
-  getBalance,
   getTransactionById,
   getUserById,
   recordTransaction,
   updateTransactionStatus,
   writeAudit,
   createApproval,
+  getApprovalByTransactionId,
   createNotification,
-  hasLedgerRef,
+  updateApprovalStatus,
 } from '../db/repository.js';
 import { resolvePayee, buildPaymentContext } from './context.js';
 import { config } from '../config.js';
@@ -24,6 +23,7 @@ export interface PreparePaymentParams {
   amount: number;
   currency?: string;
   scamRisk?: ScamRiskLevel;
+  requireGuardianApproval?: boolean;
 }
 
 export interface PreparePaymentResult {
@@ -41,13 +41,13 @@ export interface PreparePaymentResult {
 export function generateReadbackText(
   displayName: string,
   amount: number,
-  currency = 'INR',
+  currency = 'USD',
   lang = 'hi'
 ): string {
   if (lang === 'en') {
-    return `Sending ₹${amount} to ${displayName}. No extra fees apply. Please say yes to confirm.`;
+    return `Sending $${amount.toFixed(2)} to ${displayName}. No extra fees apply. Please say yes to confirm.`;
   }
-  return `${displayName} ko ${amount} rupaye bheje ja rahe hain. Koi extra fee nahi hai. Kripya confirm karein.`;
+  return `${displayName} ko ${amount.toFixed(2)} US dollars bheje ja rahe hain. Koi extra fee nahi hai. Kripya confirm karein.`;
 }
 
 export function preparePayment(
@@ -58,8 +58,9 @@ export function preparePayment(
     userId = 'user_meena',
     payee,
     amount,
-    currency = 'INR',
+    currency = 'USD',
     scamRisk = 'low',
+    requireGuardianApproval = false,
   } = params;
 
   if (!payee || typeof payee !== 'string') {
@@ -90,17 +91,17 @@ export function preparePayment(
     payeeName: resolvedPayee.displayName,
   };
 
-  const decision = evaluatePayment(paymentRequest, context);
+  const evaluatedDecision = evaluatePayment(paymentRequest, context);
+  const decision: Decision = requireGuardianApproval && evaluatedDecision.action !== 'block'
+    ? {
+        action: 'need_guardian_approval',
+        tier: 3,
+        reasons: [...evaluatedDecision.reasons, 'This recipient was selected by QR or PayPal email and always requires family approval'],
+        spoken_reason: 'This recipient was selected by QR or email. Your family must approve this payment.',
+      }
+    : evaluatedDecision;
 
-  let status = 'pending_confirmation';
-  let approvalToken: string | undefined;
-  let approvalUrl: string | undefined;
-
-  if (decision.action === 'need_guardian_approval') {
-    status = 'awaiting_approval';
-  } else if (decision.action === 'block') {
-    status = 'failed';
-  }
+  const status = decision.action === 'block' ? 'failed' : 'pending_confirmation';
 
   const tx = recordTransaction(db, {
     user_id: userId,
@@ -115,33 +116,6 @@ export function preparePayment(
     status,
     paypal_ref: null,
   });
-
-  if (decision.action === 'need_guardian_approval') {
-    const guardian = db
-      .prepare<[string], { id: string }>('SELECT id FROM guardians WHERE user_id = ? LIMIT 1')
-      .get(userId);
-    const guardianId = guardian?.id || 'guardian_ramesh';
-
-    approvalToken = crypto.randomUUID().replace(/-/g, '');
-    approvalUrl = `/approve/${approvalToken}`;
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-
-    createApproval(db, {
-      transaction_id: tx.id,
-      guardian_id: guardianId,
-      token: approvalToken,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      expires_at: expiresAt,
-    });
-
-    createNotification(db, {
-      user_id: userId,
-      kind: 'approval_requested',
-      message: `Guardian approval requested for ₹${amount} to ${resolvedPayee.displayName}.`,
-      spoken_text: `Approval request bhej di gayi hai.`,
-    });
-  }
 
   writeAudit(db, {
     user_id: userId,
@@ -170,8 +144,6 @@ export function preparePayment(
     payeeEmail: resolvedPayee.email,
     amount,
     status: tx.status,
-    approvalToken,
-    approvalUrl,
   };
 }
 
@@ -184,12 +156,12 @@ export interface ConfirmPaymentResult {
   status: string;
   transactionId: string;
   batchId?: string;
-  newBalance?: number;
-  balance?: number;
   alreadyPaid?: boolean;
   message?: string;
   spoken_message?: string;
   paypalStatus?: string;
+  approvalToken?: string;
+  approvalUrl?: string;
   error?: string;
   httpStatus?: number;
 }
@@ -237,15 +209,6 @@ export async function refreshPayoutStatus(
   }
 
   if (['FAILED', 'DENIED', 'CANCELED', 'CANCELLED', 'BLOCKED', 'RETURNED', 'REFUNDED', 'REVERSED'].includes(status)) {
-    const refundRef = `ref_${tx.id}`;
-    if (!hasLedgerRef(db, refundRef)) {
-      addLedgerEntry(db, {
-        user_id: tx.user_id,
-        delta: tx.amount,
-        reason: `Refund reservation for failed tx ${tx.id}`,
-        ref: refundRef,
-      });
-    }
     updateTransactionStatus(db, tx.id, 'failed', tx.paypal_ref);
     writeAudit(db, {
       user_id: tx.user_id,
@@ -300,7 +263,6 @@ export async function confirmPayment(
         alreadyPaid: true,
         transactionId: tx.id,
         batchId: tx.paypal_ref || undefined,
-        newBalance: getBalance(db, tx.user_id),
         httpStatus: 200,
       };
     }
@@ -309,7 +271,7 @@ export async function confirmPayment(
         status: 'failed',
         transactionId: tx.id,
         error: 'PayPal marked this payout as failed.',
-        spoken_message: 'Payment failed and the reserved amount was returned to your wallet.',
+        spoken_message: 'PayPal did not complete this payout. Check PayPal activity before retrying.',
         httpStatus: 200,
       };
     }
@@ -338,6 +300,10 @@ export async function confirmPayment(
   }
 
   if (!userConfirmed) {
+    const approval = getApprovalByTransactionId(db, tx.id);
+    if (approval?.status === 'pending' || approval?.status === 'awaiting_user_confirmation') {
+      updateApprovalStatus(db, approval.token, 'cancelled');
+    }
     updateTransactionStatus(db, tx.id, 'cancelled');
     writeAudit(db, {
       user_id: tx.user_id,
@@ -352,34 +318,64 @@ export async function confirmPayment(
     };
   }
 
-  const balance = getBalance(db, tx.user_id);
-  if (balance < tx.amount) {
-    updateTransactionStatus(db, tx.id, 'failed');
+  // Risky or unverified payments first require the user's spoken readback confirmation.
+  // PayPal's Business Sandbox balance is the only funds source; no local INR balance is reserved.
+  if (tx.decision === 'need_guardian_approval' && tx.status === 'pending_confirmation') {
+    const guardian = db
+      .prepare<[string], { id: string }>('SELECT id FROM guardians WHERE user_id = ? LIMIT 1')
+      .get(tx.user_id);
+    const guardianId = guardian?.id || 'guardian_ramesh';
+    const approvalToken = crypto.randomUUID().replace(/-/g, '');
+    const approvalUrl = `/approve/${approvalToken}`;
+    createApproval(db, {
+      transaction_id: tx.id,
+      guardian_id: guardianId,
+      token: approvalToken,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    });
+    updateTransactionStatus(db, tx.id, 'awaiting_approval');
+
+    let payeeName = tx.counterparty_id;
+    if (tx.counterparty_type === 'contact') {
+      payeeName = db.prepare<[string], { display_name: string }>(
+        'SELECT display_name FROM contacts WHERE id = ?'
+      ).get(tx.counterparty_id)?.display_name || payeeName;
+    } else if (tx.counterparty_type === 'merchant') {
+      payeeName = db.prepare<[string], { name: string }>(
+        'SELECT name FROM merchants WHERE id = ?'
+      ).get(tx.counterparty_id)?.name || payeeName;
+    }
+    createNotification(db, {
+      user_id: tx.user_id,
+      kind: 'approval_requested',
+      message: `Guardian approval requested for $${tx.amount.toFixed(2)} to ${payeeName}.`,
+      spoken_text: 'Approval request sent to your family member.',
+    });
     writeAudit(db, {
       user_id: tx.user_id,
-      kind: 'payment_insufficient_funds',
-      payload: JSON.stringify({
-        transactionId: tx.id,
-        balance,
-        requiredAmount: tx.amount,
-      }),
+      kind: 'guardian_approval_requested',
+      payload: JSON.stringify({ transactionId: tx.id, amount: tx.amount, payee: payeeName }),
     });
     return {
-      status: 'failed',
-      transactionId: tx.id,
-      error: 'Insufficient balance',
-      spoken_message: 'Aapke wallet mein paryapt balance nahi hai.',
-      balance,
-      httpStatus: 400,
+      status: 'awaiting_approval', transactionId: tx.id, approvalToken, approvalUrl,
+      message: `Your family member must approve $${tx.amount.toFixed(2)} to ${payeeName}. No PayPal payout has been sent yet.`,
+      spoken_message: `Aapki family ko ${payeeName} ko ${tx.amount.toFixed(2)} US dollars bhejne ki approval request bhej di hai. Approval milne ke baad payment apne aap bhej di jayegi.`,
+      httpStatus: 202,
     };
   }
 
-  addLedgerEntry(db, {
-    user_id: tx.user_id,
-    delta: -tx.amount,
-    reason: `Payment reservation for tx ${tx.id}`,
-    ref: `res_${tx.id}`,
-  });
+  if (tx.status === 'awaiting_approval') {
+    const approval = getApprovalByTransactionId(db, tx.id);
+    return {
+      status: 'awaiting_approval', transactionId: tx.id,
+      approvalToken: approval?.token,
+      approvalUrl: approval ? `/approve/${approval.token}` : undefined,
+      message: 'Waiting for family approval. No PayPal payout has been sent yet.',
+      httpStatus: 202,
+    };
+  }
 
   updateTransactionStatus(db, tx.id, 'processing');
   writeAudit(db, {
@@ -388,12 +384,16 @@ export async function confirmPayment(
     payload: JSON.stringify({ transactionId: tx.id, amount: tx.amount }),
   });
 
-  let recipientEmail = config.PAYPAL_SANDBOX_RECEIVER_EMAIL || '';
+  let recipientEmail = '';
   if (tx.counterparty_type === 'contact') {
     const c = db
       .prepare<[string], { paypal_email: string }>('SELECT paypal_email FROM contacts WHERE id = ?')
       .get(tx.counterparty_id);
-    if (c?.paypal_email && !c.paypal_email.endsWith('@example.com')) {
+    if (tx.counterparty_id === 'contact_sabzi_wala' && config.PAYPAL_SANDBOX_VEGETABLE_VENDOR_EMAIL) {
+      recipientEmail = config.PAYPAL_SANDBOX_VEGETABLE_VENDOR_EMAIL;
+    } else if (tx.counterparty_id === 'contact_doodh_wala' && config.PAYPAL_SANDBOX_MILK_VENDOR_EMAIL) {
+      recipientEmail = config.PAYPAL_SANDBOX_MILK_VENDOR_EMAIL;
+    } else if (c?.paypal_email && !c.paypal_email.endsWith('@example.com')) {
       recipientEmail = c.paypal_email;
     }
   } else if (tx.counterparty_type === 'merchant') {
@@ -404,8 +404,8 @@ export async function confirmPayment(
       recipientEmail = m.paypal_email;
     } else if (tx.counterparty_id === 'merchant_ravi_cabs') {
       recipientEmail = config.PAYPAL_SANDBOX_MERCHANT_RECIPIENT_EMAIL
-        || config.PAYPAL_SANDBOX_RECEIVER_EMAIL
-        || recipientEmail;
+        || config.PAYPAL_SANDBOX_CAB_DRIVER_EMAIL
+        || '';
     }
   } else if (tx.counterparty_id.includes('@')) {
     recipientEmail = tx.counterparty_id;
@@ -413,12 +413,13 @@ export async function confirmPayment(
 
   let batchId = '';
   let batchStatus = '';
-  const paypalAmount = tx.currency === 'INR'
-    ? Math.round(tx.amount * config.PAYPAL_SANDBOX_INR_TO_USD_RATE * 100) / 100
-    : tx.amount;
-  const paypalCurrency = tx.currency === 'INR' ? 'USD' : tx.currency;
+  const paypalAmount = tx.amount;
+  const paypalCurrency = tx.currency;
 
   try {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      throw new Error('No PayPal recipient email is set. Scan the recipient QR or enter their Sandbox email.');
+    }
     if (paypalAmount <= 0) throw new Error('PayPal payout amount is below the smallest supported unit.');
     const payoutBatch = await createPayoutBatch([
       {
@@ -472,14 +473,7 @@ export async function confirmPayment(
     }
   } catch (err) {
     const errMsg = (err as Error).message || '';
-    // A failed PayPal call must never be reported as a successful transfer.
-    addLedgerEntry(db, {
-      user_id: tx.user_id,
-      delta: tx.amount,
-      reason: `Refund reservation for failed tx ${tx.id}`,
-      ref: `ref_${tx.id}`,
-    });
-
+    const insufficientFunds = /INSUFFICIENT_FUNDS|insufficient funds/i.test(errMsg);
     updateTransactionStatus(db, tx.id, 'failed');
     writeAudit(db, {
       user_id: tx.user_id,
@@ -491,7 +485,9 @@ export async function confirmPayment(
       status: 'failed',
       transactionId: tx.id,
       error: `Payout dispatch failed: ${errMsg}`,
-      spoken_message: 'Payment failed and amount was refunded to your wallet.',
+      spoken_message: insufficientFunds
+        ? 'The PayPal Sandbox sender account does not have enough available funds for this payout.'
+        : 'PayPal did not confirm this payout. Check PayPal activity before retrying.',
       httpStatus: 500,
     };
   }
@@ -527,13 +523,11 @@ export async function confirmPayment(
       payload: JSON.stringify({ transactionId: tx.id, batchId, amount: tx.amount, paypalAmount, paypalCurrency }),
     });
 
-    const newBalance = getBalance(db, tx.user_id);
     return {
       status: 'completed',
       transactionId: tx.id,
       batchId,
-      newBalance,
-      spoken_message: `Payment of ₹${tx.amount} completed successfully.`,
+      spoken_message: `Payment of $${tx.amount.toFixed(2)} completed successfully.`,
       httpStatus: 200,
     };
 }

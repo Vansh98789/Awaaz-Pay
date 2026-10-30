@@ -142,7 +142,7 @@ export const DesignPreviewPage: React.FC = () => {
         {/* 4. Big Buttons */}
         <section style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <Headline level={2}>4. Big Buttons (64px target)</Headline>
-          <BigButton variant="primary">Primary: Yes, pay ₹250</BigButton>
+          <BigButton variant="primary">Primary: Yes, pay $2.50</BigButton>
           <BigButton variant="secondary">Secondary: No, cancel</BigButton>
           <BigButton variant="danger">Danger: Block transaction</BigButton>
           <BigButton
@@ -170,10 +170,10 @@ export const DesignPreviewPage: React.FC = () => {
               color: 'var(--text)',
             }}
           >
-            ₹250
+            $2.50
           </div>
-          <BodyText size="large">Large body: Ramesh ji ko ₹250 bhejne hain.</BodyText>
-          <BodyText size="standard" muted>Muted standard body: Aapka dainik kharcha 1,000 rupaye tak seemit hai.</BodyText>
+          <BodyText size="large">Large body: Ramesh ji ko 2.50 US dollars bhejne hain.</BodyText>
+          <BodyText size="standard" muted>Muted standard body: Daily spending is capped at $5,000.</BodyText>
           <BodyText size="standard" lang="hi">
             हिंदी भाषा: बोलकर पैसे भेजें और खाते का बैलेंस जानें।
           </BodyText>
@@ -183,10 +183,10 @@ export const DesignPreviewPage: React.FC = () => {
         <section style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <Headline level={2}>6. Status Banners</Headline>
           <StatusBanner variant="success" label="Safal">
-            Payment safal raha! Ravi Cabs ko 250 rupaye bhej diye gaye.
+            Payment safal raha! Ravi Cabs ko 2.50 US dollars bhej diye gaye.
           </StatusBanner>
           <StatusBanner variant="warning" label="Warning">
-            New payee. Limit 500 rupaye for cooling-off period.
+            New payee. Limit $500 for cooling-off period.
           </StatusBanner>
           <StatusBanner variant="danger" label="Blocked">
             Scam alert: Call impersonation detected. Payment was stopped safely.

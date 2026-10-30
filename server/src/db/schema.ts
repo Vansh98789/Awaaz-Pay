@@ -43,7 +43,7 @@ export function runMigrations(db: Database.Database): void {
       merchant_id TEXT NOT NULL,
       paypal_invoice_id TEXT NOT NULL,
       amount REAL NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'INR',
+      currency TEXT NOT NULL DEFAULT 'USD',
       status TEXT NOT NULL,
       FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE
     );
@@ -53,7 +53,7 @@ export function runMigrations(db: Database.Database): void {
       user_id TEXT NOT NULL,
       type TEXT NOT NULL,
       amount REAL NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'INR',
+      currency TEXT NOT NULL DEFAULT 'USD',
       counterparty_type TEXT NOT NULL,
       counterparty_id TEXT NOT NULL,
       tier INTEGER NOT NULL,
@@ -138,4 +138,19 @@ export function runMigrations(db: Database.Database): void {
   try {
     db.prepare('ALTER TABLE approvals ADD COLUMN expires_at TEXT').run();
   } catch {}
+
+  // Historical transactions were stored in INR and converted at the fixed
+  // demo rate before being sent to PayPal. Normalize them once to USD so all
+  // summaries, limits, and activity rows share the PayPal currency.
+  db.prepare("UPDATE transactions SET amount = ROUND(amount * 0.012, 2), currency = 'USD' WHERE currency = 'INR'").run();
+  db.prepare("UPDATE invoices SET amount = ROUND(amount * 0.012, 2), currency = 'USD' WHERE currency = 'INR'").run();
+
+  // Replace the old seeded ₹1,000 daily default with the requested $5,000 cap.
+  db.prepare(`
+    UPDATE users
+    SET limits = json_set(limits, '$.daily_total', 5000)
+    WHERE id = 'user_meena'
+      AND json_valid(limits)
+      AND CAST(json_extract(limits, '$.daily_total') AS REAL) = 1000
+  `).run();
 }

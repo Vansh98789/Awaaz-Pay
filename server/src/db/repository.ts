@@ -453,7 +453,7 @@ export function createInvoiceRecord(
     merchant_id: invoice.merchant_id,
     paypal_invoice_id: invoice.paypal_invoice_id,
     amount: invoice.amount,
-    currency: invoice.currency || 'INR',
+    currency: invoice.currency || 'USD',
     status: invoice.status || 'SENT',
   };
 

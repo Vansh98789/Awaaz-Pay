@@ -44,22 +44,21 @@ interface LimitsData {
 }
 
 const customGridTheme = themeQuartz.withParams({
-  backgroundColor: '#18181A',
-  foregroundColor: '#F4F4F2',
-  headerBackgroundColor: '#0E0E0F',
-  headerTextColor: '#8AAEFF',
-  borderColor: '#35353A',
-  rowHoverColor: '#27272a',
+  backgroundColor: 'var(--bg-card)',
+  foregroundColor: 'var(--text-primary)',
+  headerBackgroundColor: 'var(--bg-primary)',
+  headerTextColor: 'var(--accent-cyan)',
+  borderColor: 'var(--border-subtle)',
+  rowHoverColor: 'var(--bg-surface)',
   fontFamily: 'var(--font-sans)',
 });
 
-export const FamilyDashboardPage: React.FC = () => {
+export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   const [userName, setUserName] = useState<string>('Meena');
-  const [balance, setBalance] = useState<number>(0);
-  const [paypalBalance, setPaypalBalance] = useState<{ available: string; total: string; asOf: string | null } | null>(null);
+  const [paypalBalance, setPaypalBalance] = useState<{ available: string; total: string; asOf: string | null; accountEmail?: string | null } | null>(null);
   const [paypalBalanceError, setPaypalBalanceError] = useState<string | null>(null);
   const [limits, setLimits] = useState<LimitsData>({
-    daily_total: 1000,
+    daily_total: 5000,
     per_transaction_new_payee: 500,
     max_new_payees_per_day: 2,
   });
@@ -68,7 +67,6 @@ export const FamilyDashboardPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState<string>('');
-  const [emergencyMessage, setEmergencyMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchDashboardData();
@@ -81,10 +79,13 @@ export const FamilyDashboardPage: React.FC = () => {
       const res = await fetch('/api/family/paypal-balance');
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'PayPal balance is unavailable');
-      setPaypalBalance({ available: data.available, total: data.total, asOf: data.asOf });
+      setPaypalBalance({ available: data.available, total: data.total, asOf: data.asOf, accountEmail: data.accountEmail });
     } catch (err) {
       setPaypalBalance(null);
-      setPaypalBalanceError((err as Error).message);
+      const message = (err as Error).message || '';
+      setPaypalBalanceError(/fetch failed|failed to fetch/i.test(message)
+        ? 'Could not reach PayPal Sandbox just now.'
+        : message);
     }
   };
 
@@ -98,40 +99,13 @@ export const FamilyDashboardPage: React.FC = () => {
       }
       const data = await res.json();
       setUserName(data.userName || 'Meena');
-      setBalance(data.balance ?? 0);
-      if (data.limits) setLimits(data.limits);
+      if (data.limits) setLimits({ ...data.limits, daily_total: Math.min(Number(data.limits.daily_total) || 5000, 5000) });
       setTransactions(data.transactions || []);
       setPendingApprovals(data.pendingApprovals || []);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleGrantEmergencyLimit = async () => {
-    try {
-      setEmergencyMessage(null);
-      const res = await fetch('/api/family/emergency-limit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: 'user_meena',
-          additionalDailyLimit: 5000,
-          perPaymentLimit: 5000,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to grant emergency limit');
-      }
-
-      const data = await res.json();
-      setLimits(data.limits);
-      setEmergencyMessage('✅ Emergency limit granted: +₹5,000 added to daily limit.');
-      fetchDashboardData();
-    } catch (err) {
-      setError((err as Error).message);
     }
   };
 
@@ -192,7 +166,7 @@ export const FamilyDashboardPage: React.FC = () => {
         headerName: 'Amount',
         width: 120,
         filter: 'agNumberColumnFilter',
-        valueFormatter: (params) => `₹${Number(params.value).toLocaleString('en-IN')}`,
+        valueFormatter: (params) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(params.value)),
         cellStyle: { fontWeight: '700' },
       },
       {
@@ -260,8 +234,8 @@ export const FamilyDashboardPage: React.FC = () => {
           const s = params.value;
           const isDone = s === 'completed';
           const isFailed = s === 'failed' || s === 'cancelled';
-          const isPending = s === 'pending' || s === 'processing' || s === 'confirmed';
-          const color = isDone ? '#4ade80' : isFailed ? '#f87171' : isPending ? '#fbbf24' : '#94a3b8';
+          const isPending = s === 'pending' || s === 'processing' || s === 'confirmed' || s === 'awaiting_approval';
+          const color = isDone ? 'var(--success)' : isFailed ? 'var(--danger)' : isPending ? 'var(--warning)' : 'var(--text-secondary)';
           return <span style={{ fontWeight: 600, color }}>{s}</span>;
         },
       },
@@ -274,7 +248,7 @@ export const FamilyDashboardPage: React.FC = () => {
       'blocked-row': (params) =>
         params.data?.decision === 'block' || params.data?.status === 'failed',
       'pending-row': (params) =>
-        params.data?.decision === 'need_guardian_approval' || params.data?.status === 'confirmed',
+        params.data?.decision === 'need_guardian_approval' || params.data?.status === 'confirmed' || params.data?.status === 'awaiting_approval',
       'flagged-row': (params) => Boolean(params.data?.isFlagged),
     }),
     []
@@ -285,6 +259,9 @@ export const FamilyDashboardPage: React.FC = () => {
       <header className="guardian-header">
         <h1>🛡️ Awaaz Pay · Family Activity Dashboard</h1>
         <p className="guardian-subtitle">Guardian Oversight & Real-Time Security Monitoring (AG Grid)</p>
+        <button type="button" className="auth-secondary-btn" onClick={onLogout} style={{ minHeight: '44px', marginTop: '0.75rem' }}>
+          Sign out of family portal
+        </button>
       </header>
 
       {loading && (
@@ -305,36 +282,30 @@ export const FamilyDashboardPage: React.FC = () => {
         <div className="guardian-card" style={{ padding: '1rem' }}>
           <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>User Profile</span>
           <h3 style={{ fontSize: '1.25rem', marginTop: '0.25rem' }}>{userName}</h3>
-          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Voice-first wallet</span>
-        </div>
-
-        <div className="guardian-card" style={{ padding: '1rem' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Wallet Balance</span>
-          <h3 style={{ fontSize: '1.35rem', color: '#34d399', marginTop: '0.25rem' }}>
-            ₹{balance.toLocaleString('en-IN')}
-          </h3>
-          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-            Awaaz Pay ledger, not the PayPal account balance. Sandbox only; no real money.
-          </span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Voice-first payment demo</span>
         </div>
 
         <div className="guardian-card" style={{ padding: '1rem' }} aria-live="polite">
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>PayPal Sandbox Balance · USD</span>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>PayPal sender account · Sandbox USD</span>
           {paypalBalance ? (
             <>
-              <h3 style={{ fontSize: '1.35rem', color: '#34d399', marginTop: '0.25rem' }}>
+              <h3 style={{ fontSize: '1.35rem', color: 'var(--success)', marginTop: '0.25rem' }}>
                 ${Number(paypalBalance.available).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} available
               </h3>
-              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                 Total: ${Number(paypalBalance.total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {paypalBalance.accountEmail ? ` · ${paypalBalance.accountEmail}` : ''}
                 {paypalBalance.asOf ? ` · PayPal report as of ${new Date(paypalBalance.asOf).toLocaleString()}` : ''}
+              </span>
+              <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                PayPal payouts are sent from this account. PayPal’s payout status confirms transfers; the balance report may lag.
               </span>
             </>
           ) : (
             <>
               <h3 style={{ fontSize: '1rem', marginTop: '0.25rem' }}>Unavailable</h3>
-              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                {paypalBalanceError || 'Loading PayPal balance…'} PayPal reporting can lag by up to 3 hours.
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {paypalBalanceError || 'Loading PayPal balance…'} Tap refresh to retry. PayPal reporting can lag by up to 3 hours.
               </span>
               <button type="button" onClick={fetchPayPalBalance} className="auth-secondary-btn" style={{ marginTop: '0.5rem', minHeight: '44px' }}>
                 Refresh PayPal balance
@@ -344,32 +315,16 @@ export const FamilyDashboardPage: React.FC = () => {
         </div>
 
         <div className="guardian-card" style={{ padding: '1rem' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Daily Spend Cap</span>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Daily Spend Cap · USD</span>
           <h3 style={{ fontSize: '1.25rem', marginTop: '0.25rem' }}>
-            ₹{limits.daily_total.toLocaleString('en-IN')}
+            ${limits.daily_total.toLocaleString('en-US')}
           </h3>
-          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-            ₹{limits.per_transaction_new_payee} per new payee
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            ${limits.per_transaction_new_payee} per new payee
           </span>
         </div>
 
-        <div className="guardian-card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-          <button
-            type="button"
-            className="auth-secondary-btn"
-            onClick={handleGrantEmergencyLimit}
-            style={{ fontSize: '0.85rem', padding: '0.6rem 0.75rem' }}
-          >
-            ⚡ Emergency +₹5,000 Limit
-          </button>
-        </div>
       </div>
-
-      {emergencyMessage && (
-        <div style={{ backgroundColor: 'rgba(34, 197, 94, 0.15)', border: '1px solid #22c55e', padding: '0.75rem', borderRadius: '0.5rem', marginBottom: '1rem', color: '#86efac' }}>
-          {emergencyMessage}
-        </div>
-      )}
 
       {error && <p className="error-banner">⚠️ {error}</p>}
 
@@ -378,7 +333,7 @@ export const FamilyDashboardPage: React.FC = () => {
         <section
           style={{
             backgroundColor: 'rgba(245, 158, 11, 0.15)',
-            border: '2px solid #f59e0b',
+            border: '2px solid var(--warning)',
             borderRadius: '1rem',
             padding: '1.25rem',
             marginBottom: '1.25rem',
@@ -386,7 +341,7 @@ export const FamilyDashboardPage: React.FC = () => {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
             <span style={{ fontSize: '1.5rem' }}>⚠️</span>
-            <h3 style={{ color: '#fbbf24', fontSize: '1.15rem', fontWeight: 800 }}>
+            <h3 style={{ color: 'var(--warning)', fontSize: '1.15rem', fontWeight: 800 }}>
               Pending Guardian Approvals ({pendingApprovals.length})
             </h3>
           </div>
@@ -404,7 +359,7 @@ export const FamilyDashboardPage: React.FC = () => {
                 }}
               >
                 <div>
-                  <strong>{p.payee}</strong> — ₹{p.amount}
+                  <strong>{p.payee}</strong> — ${Number(p.amount).toFixed(2)}
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                     Expires: {p.expiresAt ? new Date(p.expiresAt).toLocaleTimeString() : '30 mins'}
                   </div>

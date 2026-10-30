@@ -248,7 +248,7 @@ export function createOnboardingRouter(db: Database.Database): Router {
         name = 'Meena',
         language = 'hi',
         limits = {
-          daily_total: 1000,
+          daily_total: 5000,
           per_transaction_new_payee: 500,
           max_new_payees_per_day: 2,
         },
@@ -264,7 +264,10 @@ export function createOnboardingRouter(db: Database.Database): Router {
         id: userId,
         name,
         language,
-        limits: JSON.stringify(limits),
+        limits: JSON.stringify({
+          ...limits,
+          daily_total: Math.min(Number(limits.daily_total) || 5000, 5000),
+        }),
         created_at: new Date().toISOString(),
       });
 

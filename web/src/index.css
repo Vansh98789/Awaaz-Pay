@@ -15,6 +15,27 @@
   --focus-ring: #60a5fa;
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg-primary: #f8f8f6;
+  --bg-surface: #f0f0ed;
+  --bg-card: #ffffff;
+  --text-primary: #111111;
+  --text-secondary: #4a4a4a;
+  --accent-cyan: #1d4ed8;
+  --accent-cyan-glow: rgba(29, 78, 216, 0.2);
+  --accent-red: #b42318;
+  --accent-red-glow: rgba(180, 35, 24, 0.2);
+  --accent-green: #0f7b3f;
+  --accent-green-glow: rgba(15, 123, 63, 0.2);
+  --border-subtle: #d6d6d2;
+  --focus-ring: #1d4ed8;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -47,6 +68,41 @@ body {
   width: 100%;
   padding: 1rem 1.25rem 2rem;
 }
+
+.family-login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: var(--bg-primary);
+}
+
+.family-login-card {
+  width: min(100%, 440px);
+  padding: clamp(1.5rem, 5vw, 2.25rem);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  background: var(--bg-card);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+}
+
+.family-login-eyebrow { color: var(--accent-cyan); font-size: 0.9rem; font-weight: 700; }
+.family-login-card h1 { margin-top: 0.55rem; font-size: clamp(1.7rem, 6vw, 2.2rem); }
+.family-login-copy { margin: 0.65rem 0 1.5rem; color: var(--text-secondary); line-height: 1.55; }
+.family-login-card form { display: flex; flex-direction: column; gap: 0.65rem; }
+.family-login-card label { margin-top: 0.35rem; font-weight: 650; }
+.family-login-card input {
+  width: 100%; min-height: 50px; padding: 0.75rem 0.9rem; border: 1px solid var(--border-subtle);
+  border-radius: 10px; background: var(--bg-primary); color: var(--text-primary); font: inherit;
+}
+.family-login-card input:focus-visible, .family-login-card button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.family-login-card form button, .family-login-back {
+  min-height: 50px; margin-top: 0.7rem; border: 0; border-radius: 10px; font: inherit; font-weight: 750; cursor: pointer;
+}
+.family-login-card form button { background: var(--accent); color: var(--accent-text); }
+.family-login-card form button:disabled { opacity: 0.65; cursor: wait; }
+.family-login-back { width: 100%; margin-top: 0.75rem; border: 1px solid var(--border-subtle); background: transparent; color: var(--text-primary); }
+.family-login-error { color: var(--accent-red); }
 
 .app-header {
   display: flex;

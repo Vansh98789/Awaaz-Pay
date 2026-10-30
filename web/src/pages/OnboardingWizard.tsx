@@ -22,7 +22,7 @@ export const OnboardingWizard: React.FC = () => {
   // Form states
   const [name, setName] = useState('Meena');
   const [language, setLanguage] = useState<'hi' | 'en'>('hi');
-  const [dailyTotal, setDailyTotal] = useState(1000);
+  const [dailyTotal, setDailyTotal] = useState(5000);
   const [perPaymentCap, setPerPaymentCap] = useState(500);
   const [guardianName, setGuardianName] = useState('Ramesh');
   const [guardianContact, setGuardianContact] = useState('+971501234567');
@@ -230,11 +230,16 @@ export const OnboardingWizard: React.FC = () => {
         {step === 2 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <label style={{ fontSize: 'var(--text-body-large)', fontWeight: 700 }}>
-              Daily Spending Limit (₹)
+              Daily Spending Limit (USD, up to $5,000)
               <input
                 type="number"
+                min={1}
+                max={5000}
                 value={dailyTotal}
-                onChange={(e) => setDailyTotal(Number(e.target.value))}
+                onChange={(e) => {
+                  const value = Number(e.target.value);
+                  setDailyTotal(value > 0 ? Math.min(value, 5000) : 1);
+                }}
                 style={{
                   width: '100%',
                   minHeight: 'var(--min-target, 64px)',
@@ -250,7 +255,7 @@ export const OnboardingWizard: React.FC = () => {
             </label>
 
             <label style={{ fontSize: 'var(--text-body-large)', fontWeight: 700 }}>
-              New Payee Per-Transaction Cap (₹)
+              New Payee Per-Transaction Cap (USD)
               <input
                 type="number"
                 value={perPaymentCap}
@@ -429,11 +434,11 @@ export const OnboardingWizard: React.FC = () => {
             </div>
             <div>
               <BodyText muted>Daily Limit:</BodyText>
-              <strong>₹{dailyTotal}</strong>
+              <strong>${dailyTotal}</strong>
             </div>
             <div>
               <BodyText muted>New Payee Limit:</BodyText>
-              <strong>₹{perPaymentCap}</strong>
+              <strong>${perPaymentCap}</strong>
             </div>
             <div>
               <BodyText muted>Guardian:</BodyText>

@@ -65,7 +65,7 @@ export const MerchantDemoPage: React.FC = () => {
         body: JSON.stringify({
           merchantId: 'merchant_ravi_cabs',
           amount: Number(invoiceAmount),
-          currency: 'INR',
+          currency: 'USD',
           note,
         }),
       });
@@ -135,7 +135,7 @@ export const MerchantDemoPage: React.FC = () => {
 
         {/* Preset Amount Selector */}
         <section className="form-section" style={{ border: 'none', padding: 0 }}>
-          <label style={{ marginBottom: '0.5rem' }}>Select Fare Amount (₹):</label>
+          <label style={{ marginBottom: '0.5rem' }}>Select Fare Amount (USD):</label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
             {presets.map((p) => (
               <button
@@ -156,7 +156,7 @@ export const MerchantDemoPage: React.FC = () => {
                   handleGenerateInvoice(p);
                 }}
               >
-                ₹{p}
+                ${p.toFixed(2)}
               </button>
             ))}
           </div>
@@ -233,7 +233,7 @@ export const MerchantDemoPage: React.FC = () => {
           >
             <img
               src={invoice.qrCodeImage}
-              alt={`QR Code for ${invoice.merchantName} fare of ₹${invoice.amount}`}
+              alt={`QR Code for ${invoice.merchantName} fare of $${invoice.amount}`}
               style={{
                 width: '260px',
                 height: '260px',
@@ -243,7 +243,7 @@ export const MerchantDemoPage: React.FC = () => {
             />
             <div style={{ marginTop: '1rem', textAlign: 'center', color: '#0f172a' }}>
               <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>
-                ₹{invoice.amount.toLocaleString('en-IN')}
+                ${invoice.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <div style={{ fontSize: '0.9rem', color: '#475569', fontWeight: 600 }}>
                 {invoice.merchantName} · {invoice.paymentMode === 'paypal_invoice' ? 'PayPal invoice QR' : 'Awaaz Pay wallet QR'}

@@ -52,7 +52,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
     name: 'Meena',
     language: 'hi',
     limits: JSON.stringify({
-      daily_total: 1000,
+      daily_total: 5000,
       per_transaction_new_payee: 500,
       max_new_payees_per_day: 2,
     }),
@@ -91,6 +91,17 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
     activated_at: past48h,
   });
 
+  upsertContact(db, {
+    id: 'contact_doodh_wala',
+    user_id: user.id,
+    alias: 'doodh_wala',
+    display_name: 'Milk vendor',
+    paypal_email: 'milk-vendor-sandbox@example.com',
+    status: 'active',
+    added_by: user.id,
+    activated_at: past48h,
+  });
+
   // 4. Demo Merchant Ravi Cabs
   const merchant = upsertMerchant(db, {
     id: 'merchant_ravi_cabs',
@@ -104,7 +115,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
     id: 'inv_demo_ravi_250',
     merchant_id: merchant.id,
     amount: 250,
-    currency: 'INR',
+    currency: 'USD',
     status: 'SENT',
     paypal_invoice_id: 'INV2-DEMO-RAVI-250',
   });
@@ -123,8 +134,8 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
   recordTransaction(db, {
     user_id: user.id,
     type: 'send',
-    amount: 200,
-    currency: 'INR',
+    amount: 2.40,
+    currency: 'USD',
     counterparty_type: 'contact',
     counterparty_id: sabziWala.id,
     tier: 1,
@@ -186,11 +197,11 @@ function seedLlmCache() {
       },
     },
     {
-      phrase: 'Bhaiya ko 300 rupaye bhejo',
+      phrase: 'Bhaiya ko 3 dollars bhejo',
       result: {
         intent: 'send_money',
         recipient_alias: 'bhaiya',
-        amount: 300,
+        amount: 3,
         language: 'hi',
         confidence: 0.98,
         scam_cues: [],
@@ -198,11 +209,11 @@ function seedLlmCache() {
       },
     },
     {
-      phrase: 'Send 300 rupees to Bhaiya',
+      phrase: 'Send 3 dollars to Bhaiya',
       result: {
         intent: 'send_money',
         recipient_alias: 'bhaiya',
-        amount: 300,
+        amount: 3,
         language: 'hi',
         confidence: 0.98,
         scam_cues: [],
@@ -312,11 +323,11 @@ function seedLlmCache() {
   // Seed scam phrase in idle prompt
   const scamPhrases: Array<{ phrase: string; result: Record<string, unknown> }> = [
     {
-      phrase: 'Bijli vibhag se bol raha hoon, 500 rupaye turant transfer karo nahi to bijli kat jayegi',
+      phrase: 'Bijli vibhag se bol raha hoon, 5 dollars turant transfer karo nahi to bijli kat jayegi',
       result: {
         intent: 'send_money',
         recipient_alias: null,
-        amount: 500,
+        amount: 5,
         language: 'hi',
         confidence: 0.95,
         scam_cues: ['urgency', 'threat_authority', 'pressure_to_pay_now'],
@@ -324,11 +335,11 @@ function seedLlmCache() {
       },
     },
     {
-      phrase: 'Electricity department urgently pay 500 rupees otherwise power cut',
+      phrase: 'Electricity department urgently pay 5 dollars otherwise power cut',
       result: {
         intent: 'send_money',
         recipient_alias: null,
-        amount: 500,
+        amount: 5,
         language: 'hi',
         confidence: 0.95,
         scam_cues: ['urgency', 'threat_authority'],
@@ -356,7 +367,6 @@ if (isDirectRun) {
     console.log(`  - Guardian: ${result.guardianId} (Ramesh)`);
     console.log(`  - Contacts: ${result.contacts.join(', ')}`);
     console.log(`  - Demo Merchant: ${result.merchant} (Invoice: INV2-DEMO-RAVI-250)`);
-    console.log(`  - Starting Wallet Balance: ₹${result.balance}`);
     console.log(`  - LLM Demo Cache: Seeded in llm_demo_cache.json`);
     process.exit(0);
   } catch (err) {

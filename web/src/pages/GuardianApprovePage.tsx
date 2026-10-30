@@ -12,6 +12,8 @@ interface ApprovalDetails {
   approvalId: string;
   token: string;
   status: string;
+  transactionStatus: string;
+  paypalBatchId?: string | null;
   transactionId: string;
   amount: number;
   currency: string;
@@ -27,6 +29,8 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [deciding, setDeciding] = useState(false);
   const [decisionResult, setDecisionResult] = useState<'approved' | 'denied' | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<string | null>(null);
+  const [paymentMessage, setPaymentMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -42,6 +46,7 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
         setDetails(data);
         if (data.status === 'approved' || data.status === 'denied') {
           setDecisionResult(data.status);
+          setPaymentStatus(data.transactionStatus || null);
         }
       } catch (err) {
         setError((err as Error).message);
@@ -68,6 +73,8 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
       }
 
       setDecisionResult(decision === 'approve' ? 'approved' : 'denied');
+      setPaymentStatus(data.paymentStatus || null);
+      setPaymentMessage(data.message || null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -112,15 +119,32 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
         }
       >
         <StatusBanner
-          variant={decisionResult === 'approved' ? 'success' : 'danger'}
-          label={decisionResult === 'approved' ? 'Approved' : 'Denied'}
+          variant={decisionResult === 'denied' || paymentStatus === 'failed'
+            ? 'danger'
+            : paymentStatus === 'completed'
+              ? 'success'
+              : 'warning'}
+          label={decisionResult === 'denied'
+            ? 'Denied'
+            : paymentStatus === 'completed'
+              ? 'Sandbox payment confirmed'
+              : paymentStatus === 'failed'
+                ? 'Approval granted · payment failed'
+                : paymentStatus === 'processing'
+                  ? 'Approval granted · PayPal processing'
+                  : 'Approved'}
         >
-          You {decisionResult} ₹{details.amount} to <strong>{details.payee}</strong> for {details.userName}.
+          You {decisionResult} ${Number(details.amount).toFixed(2)} to <strong>{details.payee}</strong> for {details.userName}.
+          {paymentMessage ? ` ${paymentMessage}` : ''}
         </StatusBanner>
         <BodyText size="large" muted>
           {decisionResult === 'approved'
-            ? 'The user will be prompted on their phone to speak their final confirmation.'
-            : 'The transaction has been safely stopped.'}
+            ? paymentStatus === 'completed'
+              ? 'PayPal Sandbox confirmed this test transfer. No real money moved.'
+              : paymentStatus === 'failed'
+                ? 'PayPal did not complete the transfer. Check PayPal activity before retrying.'
+                : 'The exact payment was already confirmed by the user. It is being sent automatically after your approval.'
+            : 'The transaction was safely stopped. No PayPal payout was sent.'}
         </BodyText>
       </Page>
     );
@@ -132,7 +156,7 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
         <>
           <DotWordmark size={140} />
           <Headline level={1}>Guardian Approval</Headline>
-          <BodyText muted>A high-value or new-payee transaction requires your review.</BodyText>
+          <BodyText muted>A new recipient or higher-risk payment needs your review. Approving sends the user-confirmed payment automatically.</BodyText>
         </>
       }
       footerContent={
@@ -144,7 +168,7 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
             loading={deciding}
             loadingText="Submitting decision..."
           >
-            Approve ₹{details.amount}
+            Approve ${Number(details.amount).toFixed(2)}
           </BigButton>
 
           <BigButton
@@ -198,7 +222,7 @@ export const GuardianApprovePage: React.FC<{ token: string }> = ({ token }) => {
               lineHeight: 1,
             }}
           >
-            ₹{details.amount}
+            ${Number(details.amount).toFixed(2)}
           </div>
         </div>
 

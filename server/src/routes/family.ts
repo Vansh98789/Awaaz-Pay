@@ -3,7 +3,6 @@ import type Database from 'better-sqlite3';
 import { createOrder, captureOrder, getPayPalBalances, PayPalError } from '../paypal/index.js';
 import {
   addLedgerEntry,
-  getBalance,
   getUserById,
   createNotification,
   writeAudit,
@@ -11,11 +10,98 @@ import {
 } from '../db/repository.js';
 import { formatFundingNotificationHindi } from '../notifications/templates.js';
 import { refreshPayoutStatus } from '../payments/pipeline.js';
+import { config } from '../config.js';
+import { clearFamilySession, hasFamilySession, issueFamilySession, requireFamilyAuth, verifyFamilyCredentials } from '../auth/familyAuth.js';
+import { requireAuth } from '../auth/middleware.js';
 
 export function createFamilyRouter(db: Database.Database): Router {
   const router = Router();
 
-  // PayPal's reporting balance is separate from the Awaaz Pay INR demo ledger.
+  router.get('/session', (req: Request, res: Response) => {
+    res.status(200).json({ authenticated: hasFamilySession(req) });
+  });
+
+  router.post('/login', (req: Request, res: Response) => {
+    if (!config.FAMILY_DASHBOARD_EMAIL || !config.FAMILY_DASHBOARD_PASSWORD) {
+      res.status(503).json({ error: 'Family portal login is not configured. Set FAMILY_DASHBOARD_EMAIL and FAMILY_DASHBOARD_PASSWORD.' });
+      return;
+    }
+    if (!verifyFamilyCredentials(req.body?.email, req.body?.password)) {
+      res.status(401).json({ error: 'Email or password is incorrect.' });
+      return;
+    }
+    issueFamilySession(res);
+    res.status(200).json({ success: true });
+  });
+
+  router.post('/logout', (req: Request, res: Response) => {
+    clearFamilySession(req, res);
+    res.status(200).json({ success: true });
+  });
+
+  // Voice-wallet reads use the blind user's own app session, separately from
+  // the guardian portal session.
+  router.get('/wallet-paypal-balance', requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const result = await getPayPalBalances('USD');
+      const usd = result.balances.find((balance) => balance.currency === 'USD');
+      res.status(200).json({
+        success: true,
+        currency: 'USD',
+        total: usd?.total_balance.value ?? '0.00',
+        available: usd?.available_balance.value ?? '0.00',
+        asOf: result.as_of_time ?? result.last_refresh_time ?? null,
+        accountEmail: config.PAYPAL_SANDBOX_MERCHANT_EMAIL || null,
+        source: 'paypal_sandbox',
+        note: 'PayPal reporting balances may take up to three hours to refresh.',
+      });
+    } catch (err) {
+      const paypalDenied = err instanceof PayPalError && err.status === 403;
+      res.status(502).json({
+        success: false,
+        error: paypalDenied
+          ? 'PayPal denied balance access. Enable the List Balances or Transaction Search reporting permission for this Sandbox REST app, then restart Awaaz Pay.'
+          : (err as Error).message,
+        code: 'PAYPAL_BALANCE_UNAVAILABLE',
+      });
+    }
+  });
+
+  router.get('/wallet-activity', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const uid = req.user?.id || 'user_meena';
+      const rows = db.prepare<[string], import('../db/types.js').Transaction>(
+        'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC'
+      ).all(uid);
+      const transactions = rows.map((tx) => {
+        let counterparty = tx.counterparty_id;
+        if (tx.counterparty_type === 'contact') {
+          counterparty = db.prepare<[string], { display_name: string }>('SELECT display_name FROM contacts WHERE id = ?').get(tx.counterparty_id)?.display_name || counterparty;
+        } else if (tx.counterparty_type === 'merchant') {
+          counterparty = db.prepare<[string], { name: string }>('SELECT name FROM merchants WHERE id = ?').get(tx.counterparty_id)?.name || counterparty;
+        }
+        return {
+          id: tx.id,
+          time: tx.created_at,
+          direction: 'OUT',
+          counterparty,
+          amount: tx.amount,
+          currency: tx.currency,
+          status: tx.status,
+          paypalRef: tx.paypal_ref,
+        };
+      });
+      res.status(200).json({ success: true, transactions });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Family data and actions always require the separate guardian session.
+  // This intentionally does not honor DEMO_AUTH_BYPASS.
+  router.use(requireFamilyAuth);
+
+  // The displayed account balance is the PayPal Business Sandbox sender balance.
   router.get('/paypal-balance', async (_req: Request, res: Response) => {
     try {
       const result = await getPayPalBalances('USD');
@@ -26,6 +112,7 @@ export function createFamilyRouter(db: Database.Database): Router {
         total: usd?.total_balance.value ?? '0.00',
         available: usd?.available_balance.value ?? '0.00',
         asOf: result.as_of_time ?? result.last_refresh_time ?? null,
+        accountEmail: config.PAYPAL_SANDBOX_MERCHANT_EMAIL || null,
         source: 'paypal_sandbox',
         note: 'PayPal reporting balances may take up to three hours to refresh.',
       });
@@ -42,10 +129,9 @@ export function createFamilyRouter(db: Database.Database): Router {
   });
 
   // Dashboard endpoint for AG Grid Family Dashboard
-  router.get('/dashboard', async (req: Request, res: Response) => {
+  router.get('/dashboard', async (_req: Request, res: Response) => {
     try {
-      const { userId = 'user_meena' } = req.query;
-      const uid = String(userId);
+      const uid = 'user_meena';
       const user = getUserById(db, uid);
       if (!user) {
         res.status(404).json({ error: 'User not found' });
@@ -63,10 +149,8 @@ export function createFamilyRouter(db: Database.Database): Router {
         if (refreshed.paypalStatus) paypalStatusByTransaction.set(tx.id, refreshed.paypalStatus);
       }));
 
-      const balance = getBalance(db, uid);
-
       let limits = {
-        daily_total: 1000,
+        daily_total: 5000,
         per_transaction_new_payee: 500,
         max_new_payees_per_day: 2,
       };
@@ -75,18 +159,12 @@ export function createFamilyRouter(db: Database.Database): Router {
       } catch {
         // default
       }
+      limits.daily_total = Math.min(Number(limits.daily_total) || 5000, 5000);
 
       // 1. Fetch all transactions
       const txRows = db
         .prepare<[string], import('../db/types.js').Transaction>(
           'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC'
-        )
-        .all(uid);
-
-      // 2. Fetch all wallet_ledger rows for funding/deposits
-      const ledgerRows = db
-        .prepare<[string], import('../db/types.js').LedgerEntry>(
-          'SELECT * FROM wallet_ledger WHERE user_id = ? AND delta > 0 ORDER BY created_at DESC'
         )
         .all(uid);
 
@@ -131,24 +209,7 @@ export function createFamilyRouter(db: Database.Database): Router {
         };
       });
 
-      const formattedDeposits = ledgerRows.map((l) => ({
-        id: l.id,
-        time: l.created_at,
-        direction: 'IN',
-        counterparty: l.reason.replace(/Family funding \((.*?)\)/, '$1') || 'Funding',
-        counterpartyType: 'funding',
-        amount: l.delta,
-        currency: 'INR',
-        tier: 'Deposit',
-        riskScore: 0,
-        risk: 'Low',
-        decision: 'allow',
-        status: 'completed',
-        paypalRef: l.ref,
-        isFlagged: false,
-      }));
-
-      const allActivity = [...formattedTx, ...formattedDeposits].sort(
+      const allActivity = formattedTx.sort(
         (a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()
       );
 
@@ -176,7 +237,6 @@ export function createFamilyRouter(db: Database.Database): Router {
       res.status(200).json({
         success: true,
         userName: user.name,
-        balance,
         limits,
         transactions: allActivity,
         pendingApprovals,
@@ -188,7 +248,8 @@ export function createFamilyRouter(db: Database.Database): Router {
 
   router.post('/fund-order', async (req: Request, res: Response) => {
     try {
-      const { amount, currency = 'USD', userId = 'user_meena' } = req.body;
+      const { amount, currency = 'USD' } = req.body;
+      const userId = 'user_meena';
       if (!amount || typeof amount !== 'number' || amount <= 0) {
         res.status(400).json({ error: 'Valid positive amount is required' });
         return;
@@ -219,7 +280,8 @@ export function createFamilyRouter(db: Database.Database): Router {
 
   router.post('/capture', async (req: Request, res: Response) => {
     try {
-      const { orderId, userId = 'user_meena', senderName = 'Ramesh' } = req.body;
+      const { orderId, senderName = 'Ramesh' } = req.body;
+      const userId = 'user_meena';
       if (!orderId || typeof orderId !== 'string') {
         res.status(400).json({ error: 'orderId is required' });
         return;
@@ -244,8 +306,8 @@ export function createFamilyRouter(db: Database.Database): Router {
             ref,
           });
 
-          const newBalance = getBalance(db, userId);
-          const spokenText = formatFundingNotificationHindi(senderName, amount, newBalance);
+          const currency = captureDetails?.amount?.currency_code || 'USD';
+          const spokenText = formatFundingNotificationHindi(senderName, amount, currency);
 
           createNotification(db, {
             user_id: userId,
@@ -257,14 +319,14 @@ export function createFamilyRouter(db: Database.Database): Router {
           writeAudit(db, {
             user_id: userId,
             kind: 'family_fund_captured',
-            payload: JSON.stringify({ orderId, captureId, amount, newBalance }),
+            payload: JSON.stringify({ orderId, captureId, amount, currency }),
           });
 
           res.status(200).json({
             status: 'COMPLETED',
             captureId,
             amount,
-            balance: newBalance,
+            currency,
           });
           return;
         }
@@ -272,7 +334,7 @@ export function createFamilyRouter(db: Database.Database): Router {
         res.status(200).json({
           status: 'COMPLETED',
           captureId,
-          balance: getBalance(db, userId),
+          currency: captureDetails?.amount?.currency_code || 'USD',
           alreadyProcessed: true,
         });
         return;
@@ -286,21 +348,22 @@ export function createFamilyRouter(db: Database.Database): Router {
 
   router.post('/emergency-limit', (req: Request, res: Response) => {
     try {
-      const { userId = 'user_meena', additionalDailyLimit = 5000, perPaymentLimit = 5000 } = req.body;
+      const { additionalDailyLimit = 5000, perPaymentLimit = 5000 } = req.body;
+      const userId = 'user_meena';
       const user = getUserById(db, userId);
       if (!user) {
         res.status(404).json({ error: 'User not found' });
         return;
       }
 
-      let limits = { daily_total: 1000, per_transaction_new_payee: 500, max_new_payees_per_day: 2 };
+      let limits = { daily_total: 5000, per_transaction_new_payee: 500, max_new_payees_per_day: 2 };
       try {
         limits = JSON.parse(user.limits);
       } catch {
         // default
       }
 
-      limits.daily_total += Number(additionalDailyLimit);
+      limits.daily_total = Math.min(5000, limits.daily_total + Number(additionalDailyLimit));
       limits.per_transaction_new_payee = Math.max(limits.per_transaction_new_payee, Number(perPaymentLimit));
 
       db.prepare('UPDATE users SET limits = ? WHERE id = ?').run(JSON.stringify(limits), userId);
@@ -308,8 +371,8 @@ export function createFamilyRouter(db: Database.Database): Router {
       createNotification(db, {
         user_id: userId,
         kind: 'emergency_limit_granted',
-        message: `Emergency limit increased by ₹${additionalDailyLimit}. New daily limit: ₹${limits.daily_total}.`,
-        spoken_text: `Ramesh ji ne aapki kharch karne ki limit badha di gayi hai. Nayi limit ₹${limits.daily_total} hai.`,
+        message: `Emergency limit is now $${limits.daily_total} per day.`,
+        spoken_text: `Aapki daily spending limit ab ${limits.daily_total} US dollars hai.`,
       });
 
       writeAudit(db, {

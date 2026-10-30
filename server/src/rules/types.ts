@@ -52,7 +52,7 @@ export interface RulesConfig {
 
 export const DEFAULT_RULES_CONFIG: RulesConfig = {
   tier1PerPaymentMax: 5000,
-  tier1DailyTotalDefault: 10000,
+  tier1DailyTotalDefault: 5000,
   tier2NewMerchantPerPaymentMax: 500,
   tier2NewPersonalPerPaymentMax: 300,
   tier2NewPayeesDailyTotalMax: 1000,

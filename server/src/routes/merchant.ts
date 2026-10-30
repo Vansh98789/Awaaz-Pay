@@ -34,6 +34,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       }
       const paypalEmail = merchant.id === 'merchant_ravi_cabs'
         ? process.env.PAYPAL_SANDBOX_MERCHANT_RECIPIENT_EMAIL
+          || process.env.PAYPAL_SANDBOX_CAB_DRIVER_EMAIL
           || process.env.PAYPAL_SANDBOX_RECEIVER_EMAIL
           || merchant.paypal_email
         : merchant.paypal_email;
@@ -66,7 +67,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       const {
         merchantId = 'merchant_ravi_cabs',
         amount = 250,
-        currency = 'INR',
+        currency = 'USD',
         note = 'Ride with Ravi Cabs',
       } = req.body;
 
@@ -82,6 +83,7 @@ export function createMerchantRouter(db: Database.Database): Router {
         : merchant.paypal_email;
       const settlementEmail = merchant.id === 'merchant_ravi_cabs'
         ? process.env['PAYPAL_SANDBOX_MERCHANT_RECIPIENT_EMAIL']
+          || process.env['PAYPAL_SANDBOX_CAB_DRIVER_EMAIL']
           || process.env['PAYPAL_SANDBOX_RECEIVER_EMAIL']
           || merchant.paypal_email
         : merchant.paypal_email;
@@ -249,8 +251,8 @@ export function createMerchantRouter(db: Database.Database): Router {
       const user = getUserById(db, userId);
       const isHindi = user?.language !== 'en';
 
-      const readbackHindi = `${invoice.merchant_name}, ${invoice.amount} rupaye. Kya main bhej doon?`;
-      const readbackEnglish = `${invoice.merchant_name}, ${invoice.amount} rupees. Shall I pay?`;
+      const readbackHindi = `${invoice.merchant_name}, ${invoice.amount.toFixed(2)} US dollars. Kya main bhej doon?`;
+      const readbackEnglish = `${invoice.merchant_name}, $${invoice.amount.toFixed(2)}. Shall I pay?`;
 
       res.status(200).json({
         success: true,
@@ -316,14 +318,12 @@ export function createMerchantRouter(db: Database.Database): Router {
         return;
       }
 
-      if (prep.decision.action === 'need_guardian_approval') {
+      if (prep.decision.action === 'need_guardian_approval' && !confirm) {
         res.status(200).json({
           success: false,
-          status: 'need_guardian_approval',
+          status: 'awaiting_confirmation',
           transactionId: prep.transactionId,
-          approvalToken: prep.approvalToken,
-          approvalUrl: prep.approvalUrl,
-          message: 'Payment requires guardian approval',
+          message: 'Read back the invoice details and confirm to request family approval.',
         });
         return;
       }
@@ -352,7 +352,6 @@ export function createMerchantRouter(db: Database.Database): Router {
             success: true,
             status: 'completed',
             transactionId: prep.transactionId,
-            newBalance: result.newBalance,
             spokenMessage: result.spoken_message,
             paymentProvider: 'paypal_sandbox',
             paypalBatchId: result.batchId,
@@ -366,6 +365,19 @@ export function createMerchantRouter(db: Database.Database): Router {
             status: 'processing',
             transactionId: result.transactionId,
             batchId: result.batchId,
+            message: result.spoken_message,
+            paymentProvider: 'paypal_sandbox',
+          });
+          return;
+        }
+
+        if (result.status === 'awaiting_approval') {
+          res.status(202).json({
+            success: true,
+            status: 'awaiting_approval',
+            transactionId: result.transactionId,
+            approvalToken: result.approvalToken,
+            approvalUrl: result.approvalUrl,
             message: result.spoken_message,
             paymentProvider: 'paypal_sandbox',
           });

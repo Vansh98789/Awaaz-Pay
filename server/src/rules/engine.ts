@@ -101,7 +101,7 @@ export function evaluatePayment(
     const threshold = config.medianMultiplierMax * context.medianPastPaymentAmount;
     if (request.amount > threshold) {
       approvalReasons.push(
-        `Amount ₹${request.amount} is more than ${config.medianMultiplierMax}x your past median of ₹${context.medianPastPaymentAmount}`
+        `Amount $${request.amount} is more than ${config.medianMultiplierMax}x your past median of $${context.medianPastPaymentAmount}`
       );
       primarySpokenReason =
         primarySpokenReason ??
@@ -109,11 +109,13 @@ export function evaluatePayment(
     }
   }
 
-  const effectiveDailyLimit =
-    context.userLimits?.daily_total ?? config.tier1DailyTotalDefault;
+  const effectiveDailyLimit = Math.min(
+    context.userLimits?.daily_total ?? config.tier1DailyTotalDefault,
+    5000
+  );
   if (context.todayTotalAmount + request.amount > effectiveDailyLimit) {
     approvalReasons.push(
-      `Total spending today (₹${context.todayTotalAmount + request.amount}) exceeds daily limit of ₹${effectiveDailyLimit}`
+      `Total spending today ($${context.todayTotalAmount + request.amount}) exceeds daily limit of $${effectiveDailyLimit}`
     );
     primarySpokenReason =
       primarySpokenReason ??
@@ -136,7 +138,7 @@ export function evaluatePayment(
   if (effectivePayeeType === 'trusted_contact') {
     if (request.amount > config.tier1PerPaymentMax) {
       approvalReasons.push(
-        `Amount ₹${request.amount} exceeds Tier 1 trusted contact per-payment cap of ₹${config.tier1PerPaymentMax}`
+        `Amount $${request.amount} exceeds Tier 1 trusted contact per-payment cap of $${config.tier1PerPaymentMax}`
       );
       primarySpokenReason =
         primarySpokenReason ??
@@ -166,9 +168,16 @@ export function evaluatePayment(
     ? (context.userLimits?.per_transaction_new_payee ?? config.tier2NewMerchantPerPaymentMax)
     : config.tier2NewPersonalPerPaymentMax;
 
+  // A first-time personal payee (including a cab driver added from a QR/email)
+  // always gets guardian review, even when the amount is below the spot-payment cap.
+  if (!isMerchant) {
+    approvalReasons.push('First-time payee requires family approval');
+    primarySpokenReason = primarySpokenReason ?? 'This is a new recipient. Your family must approve the payment.';
+  }
+
   if (request.amount > perPaymentCap) {
     approvalReasons.push(
-      `Amount ₹${request.amount} exceeds per-payment cap of ₹${perPaymentCap} for new ${isMerchant ? 'merchant' : 'personal account'}`
+      `Amount $${request.amount} exceeds per-payment cap of $${perPaymentCap} for new ${isMerchant ? 'merchant' : 'personal account'}`
     );
   }
 
@@ -177,7 +186,7 @@ export function evaluatePayment(
     config.tier2NewPayeesDailyTotalMax
   ) {
     approvalReasons.push(
-      `Combined spending on new payees today (₹${context.todayNewPayeesTotalAmount + request.amount}) exceeds cap of ₹${config.tier2NewPayeesDailyTotalMax}`
+      `Combined spending on new payees today ($${context.todayNewPayeesTotalAmount + request.amount}) exceeds cap of $${config.tier2NewPayeesDailyTotalMax}`
     );
   }
 
@@ -194,7 +203,7 @@ export function evaluatePayment(
     config.tier2SingleNewPayeeCumulativeMax
   ) {
     approvalReasons.push(
-      `Cumulative spending to this new payee (₹${context.cumulativeAmountToThisPayee + request.amount}) exceeds cap of ₹${config.tier2SingleNewPayeeCumulativeMax}`
+      `Cumulative spending to this new payee ($${context.cumulativeAmountToThisPayee + request.amount}) exceeds cap of $${config.tier2SingleNewPayeeCumulativeMax}`
     );
   }
 

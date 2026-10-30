@@ -2,6 +2,7 @@ export type ConversationState =
   | 'idle'
   | 'awaiting_confirmation'
   | 'awaiting_payment_details'
+  | 'awaiting_payment_recipient'
   | 'awaiting_guardian_approval'
   | 'awaiting_scam_answers'
   | 'done';
@@ -25,6 +26,7 @@ export interface SessionData {
   isNewPayee?: boolean;
   accumulatedText?: string;
   pendingPayeeRaw?: string;
+  pendingScamRisk?: 'low' | 'medium' | 'high';
 
   // Task 16 invoice fields
   isInvoicePayment?: boolean;
@@ -77,6 +79,7 @@ export function resetSession(sessionId: string): void {
     session.isNewPayee = undefined;
     session.accumulatedText = undefined;
     session.pendingPayeeRaw = undefined;
+    session.pendingScamRisk = undefined;
   }
 }
 

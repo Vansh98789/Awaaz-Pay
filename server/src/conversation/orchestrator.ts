@@ -3,7 +3,6 @@ import { parseIntent } from '../intent/parseIntent.js';
 import { regexFallback } from '../intent/fallback.js';
 import {
   listContacts,
-  getBalance,
   getUserById,
   createNotification,
   writeAudit,
@@ -15,6 +14,7 @@ import {
 } from '../db/repository.js';
 import { parseInvoiceQr } from '../payments/qrParser.js';
 import { preparePayment, confirmPayment } from '../payments/pipeline.js';
+import { getPayPalBalances } from '../paypal/index.js';
 import { resolvePayee, buildPaymentContext } from '../payments/context.js';
 import { evaluatePayment } from '../rules/engine.js';
 import { detectScamSignals, combineRisk } from '../safety/scamSignals.js';
@@ -30,6 +30,32 @@ import {
   resetSession,
   type ConversationState,
 } from './session.js';
+
+function askGuardianGatedConfirmation(payee: string, amount: number, lang: 'hi' | 'en'): string {
+  return lang === 'hi'
+    ? `${payee} ko ${amount.toFixed(2)} US dollars bhejne hain. Pehle main aapki family se approval loonga. Family approve karegi tabhi PayPal Sandbox payment bheji jayegi. Kya main approval request bhejun?`
+    : `You want to send $${amount.toFixed(2)} to ${payee}. I will first ask your family to approve. PayPal Sandbox will send the payment only after they approve. Shall I request approval?`;
+}
+
+function extractNewPayeeLabel(text: string): string | null {
+  const value = text.normalize('NFKC').trim();
+  if (!value || /@|\d/.test(value)) return null;
+  const cleaned = value
+    .replace(/^(?:hey\s+)?(?:please\s+)?(?:it is|it's|the name is|pay|send money to|send to)\s+/i, '')
+    .replace(/[.,!?;:।]+$/g, '')
+    .trim();
+  const normalized = cleaned.toLowerCase();
+  if (['list', 'help', 'repeat', 'again', 'cancel', 'stop', 'back', 'home', 'yes', 'no', 'haan', 'nahi', 'नहीं', 'हाँ'].includes(normalized)) return null;
+  if (cleaned.length < 2 || cleaned.length > 80 || cleaned.split(/\s+/).length > 6) return null;
+  if (!/^[\p{L}\p{M}][\p{L}\p{M}\s'’.-]*$/u.test(cleaned)) return null;
+  return cleaned;
+}
+
+function askForNewPayeeDetails(payee: string, lang: 'hi' | 'en'): string {
+  return lang === 'hi'
+    ? `${payee} aapki known list mein nahi hain. Choose karein: recipient QR scan karein, ya PayPal Sandbox email se pay karein. Email bol sakte hain ya type kar sakte hain. Main payment se pehle naam aur amount dohraungi.`
+    : `${payee} is not in your known contacts. Choose: scan their recipient QR or pay by PayPal Sandbox email. You can say or type the email. I will read back the recipient and amount before any payment.`;
+}
 
 export interface ConverseResponse {
   replyText: string;
@@ -82,7 +108,7 @@ export async function processConversation(
     if (session.isInvoicePayment && mentionsNumber && intentResult.intent !== 'confirm_yes') {
       replyText =
         lang === 'hi'
-          ? `Yeh payment invoice se hai. Amount ₹${session.pendingAmount} badla nahi ja sakta. Bhejne ke liye haan bolein.`
+          ? `Yeh payment invoice se hai. Amount ${session.pendingAmount?.toFixed(2)} dollars badla nahi ja sakta. Bhejne ke liye haan bolein.`
           : `The amount comes from the invoice and cannot be changed by voice. Say yes to pay.`;
     } else if (intentResult.intent === 'confirm_yes') {
       const confirmRes = await confirmPayment(db, {
@@ -102,20 +128,18 @@ export async function processConversation(
         }
         replyText = templates[lang].payment_success(
           session.pendingPayeeName || 'Payee',
-          session.pendingAmount || 0,
-          confirmRes.newBalance
+          session.pendingAmount || 0
         );
+      } else if (confirmRes.status === 'awaiting_approval') {
+        replyText = confirmRes.spoken_message || (lang === 'hi'
+          ? 'Family approval request bhej di gayi hai. Approval ke baad payment apne aap bheji jayegi.'
+          : 'The family approval request has been sent. The payment will be sent automatically if approved.');
       } else if (confirmRes.status === 'processing') {
         replyText = confirmRes.spoken_message || (lang === 'hi'
           ? 'PayPal abhi payment process kar raha hai. Thodi der baad status dekhein.'
           : 'PayPal is still processing this payment. Check the status again shortly.');
-      } else if (confirmRes.error?.includes('Insufficient balance')) {
-        replyText = templates[lang].insufficient_funds(
-          confirmRes.balance || 0,
-          session.pendingAmount || 0
-        );
       } else {
-        replyText = templates[lang].payment_failed;
+        replyText = confirmRes.spoken_message || templates[lang].payment_failed;
       }
 
       resetSession(sessionId);
@@ -145,6 +169,36 @@ export async function processConversation(
         }
         replyText = templates[lang].unclear_cancel;
         resetSession(sessionId);
+      }
+    }
+  } else if (session.state === 'awaiting_payment_recipient') {
+    const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    if (!emailMatch || !session.pendingAmount) {
+      replyText = lang === 'hi'
+        ? 'Pehle payee ka QR scan karein ya uska PayPal Sandbox email boliye ya type karke submit karein.'
+        : 'Scan the recipient QR, or say or enter the recipient’s PayPal Sandbox email.';
+    } else {
+      const prep = preparePayment(db, {
+        userId,
+        payee: emailMatch[0],
+        amount: session.pendingAmount,
+        scamRisk: session.pendingScamRisk || 'low',
+        requireGuardianApproval: true,
+      });
+      if (prep.decision.action === 'block') {
+        resetSession(sessionId);
+        replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
+      } else {
+        updateSession(sessionId, {
+          state: 'awaiting_confirmation',
+          currentTransactionId: prep.transactionId,
+          pendingPayeeName: prep.payee,
+          pendingAmount: prep.amount,
+          pendingPayeeRaw: emailMatch[0],
+        });
+        replyText = prep.decision.action === 'need_guardian_approval'
+          ? askGuardianGatedConfirmation(prep.payee, prep.amount, lang)
+          : templates[lang].ask_confirmation(prep.payee, prep.amount);
       }
     }
   } else if (session.state === 'awaiting_guardian_approval') {
@@ -180,20 +234,14 @@ export async function processConversation(
         if (confirmRes.status === 'completed') {
           replyText = templates[lang].payment_success(
             session.pendingPayeeName || 'Payee',
-            session.pendingAmount || 0,
-            confirmRes.newBalance
+            session.pendingAmount || 0
           );
         } else if (confirmRes.status === 'processing') {
           replyText = confirmRes.spoken_message || (lang === 'hi'
             ? 'PayPal abhi payment process kar raha hai. Thodi der baad status dekhein.'
             : 'PayPal is still processing this payment. Check the status again shortly.');
-        } else if (confirmRes.error?.includes('Insufficient balance')) {
-          replyText = templates[lang].insufficient_funds(
-            confirmRes.balance || 0,
-            session.pendingAmount || 0
-          );
         } else {
-          replyText = templates[lang].payment_failed;
+          replyText = confirmRes.spoken_message || templates[lang].payment_failed;
         }
 
         resetSession(sessionId);
@@ -290,7 +338,7 @@ export async function processConversation(
           user_id: userId,
           type: 'send_money',
           amount: session.pendingAmount || 0,
-          currency: 'INR',
+          currency: 'USD',
           counterparty_type: session.isNewPayee ? 'new_personal' : 'contact',
           counterparty_id: session.pendingPayeeRaw || 'unknown',
           tier: 3,
@@ -316,8 +364,8 @@ export async function processConversation(
         createNotification(db, {
           user_id: userId,
           kind: 'scam_alert',
-          message: `Scam alert: Payment of ₹${session.pendingAmount} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${signals.categories.join(', ') || 'instruction by caller'}).`,
-          spoken_text: `Scam chetavni: ${session.pendingPayeeName} ko ₹${session.pendingAmount} ka payment scam sandeh ke kaaran rok diya gaya.`,
+          message: `Scam alert: Payment of $${Number(session.pendingAmount).toFixed(2)} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${signals.categories.join(', ') || 'instruction by caller'}).`,
+          spoken_text: `Scam chetavni: ${session.pendingPayeeName} ko ${Number(session.pendingAmount).toFixed(2)} US dollars ka payment scam sandeh ke kaaran rok diya gaya.`,
         });
 
         replyText = templates[lang].scam_blocked_interruption;
@@ -339,18 +387,15 @@ export async function processConversation(
             scamRisk: 'medium',
           });
           updateSession(sessionId, {
-            state: 'awaiting_guardian_approval',
+            state: 'awaiting_confirmation',
             currentTransactionId: prep.transactionId,
             pendingPayeeName: session.pendingPayeeName || prep.payee,
             pendingAmount: session.pendingAmount || prep.amount,
           });
-          const guardian = db
-            .prepare<[string], { name: string }>(
-              'SELECT name FROM guardians WHERE user_id = ?'
-            )
-            .get(userId);
-          replyText = templates[lang].guardian_approval_needed(
-            guardian?.name || 'Ramesh'
+          replyText = askGuardianGatedConfirmation(
+            session.pendingPayeeName || prep.payee,
+            session.pendingAmount || prep.amount,
+            lang
           );
         } else {
           const prep = preparePayment(db, {
@@ -370,17 +415,12 @@ export async function processConversation(
             replyText = templates[lang].ask_confirmation(prep.payee, prep.amount);
           } else if (prep.decision.action === 'need_guardian_approval') {
             updateSession(sessionId, {
-              state: 'awaiting_guardian_approval',
+              state: 'awaiting_confirmation',
               currentTransactionId: prep.transactionId,
+              pendingPayeeName: prep.payee,
+              pendingAmount: prep.amount,
             });
-            const guardian = db
-              .prepare<[string], { name: string }>(
-                'SELECT name FROM guardians WHERE user_id = ?'
-              )
-              .get(userId);
-            replyText = templates[lang].guardian_approval_needed(
-              guardian?.name || 'Ramesh'
-            );
+            replyText = askGuardianGatedConfirmation(prep.payee, prep.amount, lang);
           } else {
             resetSession(sessionId);
             replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
@@ -402,7 +442,7 @@ export async function processConversation(
           user_id: userId,
           type: 'send_money',
           amount: session.pendingAmount || 0,
-          currency: 'INR',
+          currency: 'USD',
           counterparty_type: session.isNewPayee ? 'new_personal' : 'contact',
           counterparty_id: session.pendingPayeeRaw || 'unknown',
           tier: 3,
@@ -429,12 +469,22 @@ export async function processConversation(
         createNotification(db, {
           user_id: userId,
           kind: 'scam_alert',
-          message: `Scam alert: Payment of ₹${session.pendingAmount} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${finalSignals.categories.join(', ') || 'unverified payee with caller pressure'}).`,
-          spoken_text: `Scam chetavni: ${session.pendingPayeeName} ko ₹${session.pendingAmount} ka payment scam sandeh ke kaaran rok diya gaya.`,
+          message: `Scam alert: Payment of $${Number(session.pendingAmount).toFixed(2)} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${finalSignals.categories.join(', ') || 'unverified payee with caller pressure'}).`,
+          spoken_text: `Scam chetavni: ${session.pendingPayeeName} ko ${Number(session.pendingAmount).toFixed(2)} US dollars ka payment scam sandeh ke kaaran rok diya gaya.`,
         });
 
         replyText = templates[lang].scam_blocked_interruption;
         resetSession(sessionId);
+      } else if (session.isNewPayee) {
+        updateSession(sessionId, {
+          state: 'awaiting_payment_recipient',
+          pendingScamRisk: finalRisk,
+          scamInterviewStep: undefined,
+          unclearAttempts: 0,
+        });
+        replyText = lang === 'hi'
+          ? 'Ab naye payee ka QR scan karein ya PayPal Sandbox email boliye ya type karein. Main naam aur email dohraunga; aapki haan ke baad family approval request jayegi.'
+          : 'Now scan the new recipient’s QR, or say or enter their PayPal Sandbox email. I will read back the name and email; after you confirm, your family will receive the approval request.';
       } else if (finalRisk === 'medium') {
         const prep = preparePayment(db, {
           userId,
@@ -443,18 +493,15 @@ export async function processConversation(
           scamRisk: 'medium',
         });
         updateSession(sessionId, {
-          state: 'awaiting_guardian_approval',
+          state: 'awaiting_confirmation',
           currentTransactionId: prep.transactionId,
           pendingPayeeName: session.pendingPayeeName || prep.payee,
           pendingAmount: session.pendingAmount || prep.amount,
         });
-        const guardian = db
-          .prepare<[string], { name: string }>(
-            'SELECT name FROM guardians WHERE user_id = ?'
-          )
-          .get(userId);
-        replyText = templates[lang].guardian_approval_needed(
-          guardian?.name || 'Ramesh'
+        replyText = askGuardianGatedConfirmation(
+          session.pendingPayeeName || prep.payee,
+          session.pendingAmount || prep.amount,
+          lang
         );
       } else {
         const prep = preparePayment(db, {
@@ -474,18 +521,15 @@ export async function processConversation(
           replyText = templates[lang].ask_confirmation(prep.payee, prep.amount);
         } else if (prep.decision.action === 'need_guardian_approval') {
           updateSession(sessionId, {
-            state: 'awaiting_guardian_approval',
+            state: 'awaiting_confirmation',
             currentTransactionId: prep.transactionId,
             pendingPayeeName: session.pendingPayeeName || prep.payee,
             pendingAmount: session.pendingAmount || prep.amount,
           });
-          const guardian = db
-            .prepare<[string], { name: string }>(
-              'SELECT name FROM guardians WHERE user_id = ?'
-            )
-            .get(userId);
-          replyText = templates[lang].guardian_approval_needed(
-            guardian?.name || 'Ramesh'
+          replyText = askGuardianGatedConfirmation(
+            session.pendingPayeeName || prep.payee,
+            session.pendingAmount || prep.amount,
+            lang
           );
         } else {
           resetSession(sessionId);
@@ -506,6 +550,7 @@ export async function processConversation(
         payee: invoice.merchant_name,
         amount: invoice.amount,
         scamRisk: 'low',
+        requireGuardianApproval: true,
       });
 
       if (prep.decision.action === 'allow_with_confirmation') {
@@ -514,31 +559,26 @@ export async function processConversation(
           currentTransactionId: prep.transactionId,
           pendingPayeeName: invoice.merchant_name,
           pendingAmount: invoice.amount,
+          isNewPayee: true,
           isInvoicePayment: true,
           invoiceId: invoice.paypal_invoice_id,
           unclearAttempts: 0,
         });
         replyText =
           lang === 'hi'
-            ? `${invoice.merchant_name}, ${invoice.amount} rupaye. Kya main bhej doon?`
-            : `${invoice.merchant_name}, ${invoice.amount} rupees. Shall I pay?`;
+            ? `${invoice.merchant_name}, ${invoice.amount.toFixed(2)} US dollars. Kya main bhej doon?`
+            : `${invoice.merchant_name}, $${invoice.amount.toFixed(2)}. Shall I pay?`;
       } else if (prep.decision.action === 'need_guardian_approval') {
         updateSession(sessionId, {
-          state: 'awaiting_guardian_approval',
+          state: 'awaiting_confirmation',
           currentTransactionId: prep.transactionId,
           pendingPayeeName: invoice.merchant_name,
           pendingAmount: invoice.amount,
+          isNewPayee: true,
           isInvoicePayment: true,
           invoiceId: invoice.paypal_invoice_id,
         });
-        const guardian = db
-          .prepare<[string], { name: string }>(
-            'SELECT name FROM guardians WHERE user_id = ?'
-          )
-          .get(userId);
-        replyText = templates[lang].guardian_approval_needed(
-          guardian?.name || 'Ramesh'
-        );
+        replyText = askGuardianGatedConfirmation(invoice.merchant_name, invoice.amount, lang);
       } else {
         resetSession(sessionId);
         replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
@@ -572,8 +612,8 @@ export async function processConversation(
         const item = list[idx];
         replyText =
           lang === 'hi'
-            ? `Agla transaction: ${item.payee} ko ₹${item.amount}.`
-            : `Next transaction: ₹${item.amount} to ${item.payee}.`;
+            ? `Agla transaction: ${item.payee} ko ${item.amount.toFixed(2)} US dollars.`
+            : `Next transaction: $${item.amount.toFixed(2)} to ${item.payee}.`;
         updateSession(sessionId, { historyIndex: idx + 1 });
       } else {
         replyText =
@@ -593,8 +633,15 @@ export async function processConversation(
       replyText = templates[lang].payment_cancelled;
       resetSession(sessionId);
     } else if (intentResult.intent === 'check_balance') {
-      const balance = getBalance(db, userId);
-      replyText = templates[lang].check_balance(balance);
+      try {
+        const result = await getPayPalBalances('USD');
+        const usd = result.balances.find((entry) => entry.currency === 'USD');
+        replyText = templates[lang].check_balance(usd?.available_balance.value || '0.00');
+      } catch {
+        replyText = lang === 'hi'
+          ? 'Abhi PayPal Sandbox ka balance nahi mil saka. Thodi der baad dobara poochiye.'
+          : 'I could not retrieve the PayPal Sandbox balance just now. Please try again shortly.';
+      }
     } else if (intentResult.intent === 'read_history') {
       const summary = getSevenDaySummary(db, userId);
       updateSession(sessionId, {
@@ -605,20 +652,19 @@ export async function processConversation(
     } else if (intentResult.intent === 'explain_payment') {
       const exp = explainRecentPayment(db, userId);
       replyText = exp.spokenText[lang];
+    } else if (isCompletingPayment && session.pendingAmount && !intentResult.recipient_alias && extractNewPayeeLabel(text)) {
+      const newPayee = extractNewPayeeLabel(text)!;
+      updateSession(sessionId, {
+        state: 'awaiting_payment_recipient',
+        pendingPayeeName: newPayee,
+        pendingPayeeRaw: newPayee,
+        pendingAmount: session.pendingAmount,
+        isNewPayee: true,
+        unclearAttempts: 0,
+      });
+      replyText = askForNewPayeeDetails(newPayee, lang);
     } else if (intentResult.intent === 'send_money') {
-      const requestedDollars = /\$\s*\d|\b(?:usd|us dollars?|dollars?)\b/i.test(text);
-      if (requestedDollars) {
-        updateSession(sessionId, {
-          state: 'awaiting_payment_details',
-          pendingPayeeRaw: intentResult.recipient_alias ?? session.pendingPayeeRaw,
-          pendingPayeeName: intentResult.recipient_alias ?? session.pendingPayeeName,
-          pendingAmount: intentResult.amount ?? session.pendingAmount,
-          unclearAttempts: 0,
-        });
-        replyText = lang === 'hi'
-          ? 'Yeh wallet sirf rupaye bhej sakta hai. Kripya rakam rupaye mein boliye.'
-          : 'This wallet sends rupees only. Please say the amount in rupees.';
-      } else if (!intentResult.amount) {
+      if (!intentResult.amount) {
         updateSession(sessionId, {
           state: 'awaiting_payment_details',
           pendingPayeeRaw: intentResult.recipient_alias ?? session.pendingPayeeRaw,
@@ -638,6 +684,18 @@ export async function processConversation(
           const payee = intentResult.recipient_alias;
           const amount = intentResult.amount;
           const resolvedPayee = resolvePayee(db, userId, payee);
+
+          if (resolvedPayee.counterpartyType === 'new_personal' && !/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(payee)) {
+            updateSession(sessionId, {
+              state: 'awaiting_payment_recipient',
+              pendingPayeeName: payee,
+              pendingPayeeRaw: payee,
+              pendingAmount: amount,
+              isNewPayee: true,
+              unclearAttempts: 0,
+            });
+            replyText = askForNewPayeeDetails(payee, lang);
+          } else {
 
           const blockCheck = db
             .prepare<[string], { count: number }>(
@@ -670,7 +728,7 @@ export async function processConversation(
           const preliminaryDecision = evaluatePayment(
             {
               amount,
-              currency: 'INR',
+              currency: 'USD',
               payeeType: resolvedPayee.payeeType,
               payeeId: resolvedPayee.counterpartyId,
               payeeName: resolvedPayee.displayName,
@@ -697,11 +755,13 @@ export async function processConversation(
             });
             replyText = templates[lang].scam_ask_told_to_pay;
           } else {
+            const isEmailRecipient = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(payee);
             const prep = preparePayment(db, {
               userId,
               payee,
               amount,
               scamRisk: 'low',
+              requireGuardianApproval: isEmailRecipient,
             });
 
             if (prep.decision.action === 'allow_with_confirmation') {
@@ -710,6 +770,7 @@ export async function processConversation(
                 currentTransactionId: prep.transactionId,
                 pendingPayeeName: prep.payee,
                 pendingAmount: prep.amount,
+                isNewPayee: isEmailRecipient,
                 unclearAttempts: 0,
               });
               replyText = templates[lang].ask_confirmation(
@@ -718,25 +779,20 @@ export async function processConversation(
               );
             } else if (prep.decision.action === 'need_guardian_approval') {
               updateSession(sessionId, {
-                state: 'awaiting_guardian_approval',
+                state: 'awaiting_confirmation',
                 currentTransactionId: prep.transactionId,
                 pendingPayeeName: prep.payee,
                 pendingAmount: prep.amount,
+                isNewPayee: isEmailRecipient,
               });
-              const guardian = db
-                .prepare<[string], { name: string }>(
-                  'SELECT name FROM guardians WHERE user_id = ?'
-                )
-                .get(userId);
-              replyText = templates[lang].guardian_approval_needed(
-                guardian?.name || 'Ramesh'
-              );
+              replyText = askGuardianGatedConfirmation(prep.payee, prep.amount, lang);
             } else {
               resetSession(sessionId);
               replyText = templates[lang].payment_blocked(
                 prep.decision.spoken_reason
               );
             }
+          }
           }
         } catch (err) {
           replyText = `Error: ${(err as Error).message}`;

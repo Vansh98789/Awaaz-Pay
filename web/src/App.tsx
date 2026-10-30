@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition.js';
 import { useSpeechSynthesis } from './hooks/useSpeechSynthesis.js';
 import { triggerHaptic } from './hooks/useHaptics.js';
@@ -9,7 +8,6 @@ import {
   DotRing,
   Headline,
   BodyText,
-  BigButton,
   StatusBanner,
   type DotRingState,
 } from './design/index.js';
@@ -17,11 +15,40 @@ import { GuardianApprovePage } from './pages/GuardianApprovePage.js';
 import { OnboardingWizard } from './pages/OnboardingWizard.js';
 import { MerchantDemoPage } from './pages/MerchantDemoPage.js';
 import { FamilyDashboardPage } from './pages/FamilyDashboardPage.js';
+import { FamilyGate } from './pages/FamilyGate.js';
 import { DesignPreviewPage } from './pages/DesignPreviewPage.js';
 import { ActivityScreen } from './pages/ActivityScreen.js';
 import { ConfirmPaymentScreen } from './pages/ConfirmPaymentScreen.js';
 import { QRScannerModal } from './components/QRScannerModal.js';
 import { parseVoiceCommand } from './voice/commands.js';
+
+// Route money requests directly into the transaction conversation. That flow
+// has its own LLM intent parser plus the required risk checks and confirmation.
+// This is a domain handoff, not phrase matching for a particular command.
+function isPaymentConversationUtterance(text: string): boolean {
+  return /\b(send|sending|pay|paying|transfer|transferring|payment|payments|purchase|buy|bhej(?:na|o|do|dijiye)?|bhugtan|ada(?:y)?gi|de\s*(?:do|dijiye)|paise?\s*(?:bhej|do))\b/i.test(text)
+    || /(?:\$\s*\d|\b\d+(?:\.\d+)?\s*(?:usd|us dollars?|dollars?|rupees?|inr)\b)/i.test(text)
+    || /\bgive\b.{0,40}\b(money|cash|dollars?|rupees?|to)\b/i.test(text);
+}
+
+function isExplicitScannerRequest(text: string): boolean {
+  return /\b(scanner|camera|qr(?: code)?)\b/i.test(text)
+    && /\b(open|show|start|launch|scan|use|through|with|kholo|kholiye|स्कैन|खोल)\b/i.test(text);
+}
+
+function settingButtonStyle(selected: boolean): React.CSSProperties {
+  return {
+    minHeight: 48,
+    padding: '0.65rem 0.9rem',
+    borderRadius: 'var(--radius-pill, 999px)',
+    border: `2px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+    background: selected ? 'var(--accent)' : 'var(--surface)',
+    color: selected ? 'var(--accent-text)' : 'var(--text)',
+    font: 'inherit',
+    fontWeight: 700,
+    cursor: 'pointer',
+  };
+}
 
 interface TranscriptEntry {
   id: string;
@@ -71,6 +98,8 @@ function parseScannedRecipient(qrData: string): ScannedRecipient | null {
       const url = new URL(raw);
       name = url.searchParams.get('name')?.trim() ?? '';
       email = url.searchParams.get('email')?.trim() ?? '';
+    } else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+      email = raw;
     }
   } catch {
     return null;
@@ -102,28 +131,40 @@ export const App: React.FC = () => {
     if (path === '/activity' || hash.includes('activity')) return { path: 'activity' };
     return { path: 'wallet' };
   });
+  const currentRouteRef = useRef(currentRoute);
+  currentRouteRef.current = currentRoute;
 
   const [lang, setLang] = useState<'hi-IN' | 'en-IN'>('en-IN');
-  const [authState, setAuthState] = useState<'checking' | 'unauthenticated' | 'authenticated'>('checking');
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
-  const [textInput, setTextInput] = useState('');
+  const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('awaaz_theme') : null;
+    const initial = saved === 'light' || saved === 'dark'
+      ? saved
+      : typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    if (typeof document !== 'undefined') document.documentElement.dataset.theme = initial;
+    return initial;
+  });
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerEmailEntryOpen, setScannerEmailEntryOpen] = useState(false);
+  const [scannerRestartToken, setScannerRestartToken] = useState(0);
+  const [awaitingPaymentRecipient, setAwaitingPaymentRecipient] = useState(false);
+  const [pendingScanPaymentRequest, setPendingScanPaymentRequest] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
   const [micPermissionReady, setMicPermissionReady] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsAwaitingChoice, setSettingsAwaitingChoice] = useState(false);
   const [isOffline, setIsOffline] = useState(() => (typeof navigator !== 'undefined' ? !navigator.onLine : false));
   const [isThinking, setIsThinking] = useState(false);
+  const [conversationState, setConversationState] = useState('idle');
   const [isContinuousVoice, setIsContinuousVoice] = useState(true);
 
   const continuousVoiceRef = useRef(isContinuousVoice);
   continuousVoiceRef.current = isContinuousVoice;
 
-  const authStateRef = useRef(authState);
-  authStateRef.current = authState;
-
   const startListeningRef = useRef<() => void>(() => {});
+  const autoListenAfterNavigationRef = useRef(false);
+  const pageVoiceSessionRef = useRef(false);
+  const [pendingActivityRequest, setPendingActivityRequest] = useState<string | null>(null);
 
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmationState>({
     isOpen: false,
@@ -135,9 +176,22 @@ export const App: React.FC = () => {
     typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `sess-${Date.now()}`
   );
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    document.documentElement.style.colorScheme = themeMode;
+    localStorage.setItem('awaaz_theme', themeMode);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeMode === 'dark' ? '#0E0E0F' : '#F8F8F6');
+  }, [themeMode]);
+
   const handleSpeechEnd = useCallback(() => {
+    if (currentRouteRef.current.path !== 'wallet') return;
+    if (autoListenAfterNavigationRef.current || pageVoiceSessionRef.current) {
+      autoListenAfterNavigationRef.current = false;
+      window.setTimeout(() => startListeningRef.current(), 350);
+      return;
+    }
     // Blind-First Hands-Free Voice: automatically resume listening after assistant speaks
-    if (continuousVoiceRef.current && authStateRef.current === 'authenticated') {
+    if (continuousVoiceRef.current) {
       setTimeout(() => {
         startListeningRef.current();
       }, 350);
@@ -158,7 +212,7 @@ export const App: React.FC = () => {
       text:
         lang === 'hi-IN'
           ? 'नमस्ते। बोलिए, मैं सुन रही हूँ।'
-          : 'Say it. Hear it. Pay safely. Tap the mic or speak to start.',
+          : 'Tap the microphone once, then talk naturally. Say “help” for voice commands.',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -195,23 +249,6 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Auth status check
-  useEffect(() => {
-    async function checkAuth() {
-      try {
-        const res = await fetch('/api/auth/me', { credentials: 'include' });
-        if (res.ok) {
-          setAuthState('authenticated');
-        } else {
-          setAuthState('unauthenticated');
-        }
-      } catch {
-        setAuthState('unauthenticated');
-      }
-    }
-    checkAuth();
-  }, []);
-
   // Offline / Online listeners
   useEffect(() => {
     const handleOffline = () => {
@@ -243,7 +280,7 @@ export const App: React.FC = () => {
     };
   }, [lang, speak]);
 
-  const handleSpeechResult = async (text: string) => {
+  const handleSpeechResult = async (text: string, agentAlreadyDelegated = false) => {
     triggerHaptic('understood');
     setIsThinking(true);
 
@@ -256,13 +293,25 @@ export const App: React.FC = () => {
     };
     setTranscripts((prev) => [...prev, userEntry]);
 
-    const command = parseVoiceCommand(text);
+    const parsedCommand = pendingConfirmation.isOpen ? parseVoiceCommand(text) : null;
+    let command: ReturnType<typeof parseVoiceCommand> = parsedCommand === 'read_history' ? 'open_activity' : parsedCommand;
     const normalized = text
       .normalize('NFKC')
       .toLowerCase()
       .replace(/[.,!?;:।]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+
+    if (awaitingPaymentRecipient && /\b(e-?mail|email address)\b/i.test(text) && !/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text)) {
+      setScannerEmailEntryOpen(true);
+      setIsThinking(false);
+      const reply = lang === 'hi-IN'
+        ? 'PayPal Sandbox email boliye ya screen par type karke Continue dabaiye.'
+        : 'Say the PayPal Sandbox email, or type it on screen and press Continue.';
+      setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+      speak(reply, { lang });
+      return;
+    }
 
     // Handle voice answers to confirmation screen if open
     if (pendingConfirmation.isOpen) {
@@ -280,7 +329,22 @@ export const App: React.FC = () => {
         setIsThinking(false);
         return;
       }
-      if (command !== 'repeat' && command !== 'help') {
+      if (pendingConfirmation.isSuccess || pendingConfirmation.isFailed || pendingConfirmation.isPending || pendingConfirmation.isApprovalPending || pendingConfirmation.isBlocked) {
+        if (command === 'go_home' || command === 'go_back' || command === 'close_confirmation') {
+          setPendingConfirmation({ isOpen: false, payeeName: '', amount: 0 });
+          const done = lang === 'hi-IN' ? 'Theek hai, payment screen band kar di.' : 'Okay, closing the payment screen.';
+          speak(done, { lang });
+          setIsThinking(false);
+          return;
+        }
+        const safeVoiceActions: string[] = ['repeat', 'help', 'check_paypal_balance', 'open_activity', 'open_family', 'open_settings', 'open_scanner', 'close_scanner', 'retry_scanner', 'close_confirmation', 'go_home', 'go_back'];
+        if (!command || !safeVoiceActions.includes(command)) {
+          const done = lang === 'hi-IN' ? 'Payment screen band karne ke liye ghar jao boliye.' : 'Say “go home” to close this payment screen.';
+          speak(done, { lang });
+          setIsThinking(false);
+          return;
+        }
+      } else if (command !== 'repeat' && command !== 'help' && command !== 'check_paypal_balance' && command !== 'open_activity' && command !== 'open_family' && command !== 'open_settings' && command !== 'open_scanner') {
         setIsThinking(false);
         const confirmMsg = lang === 'hi-IN'
           ? 'Payment abhi nahi bheja gaya. Bhejne ke liye haan, cancel karne ke liye nahi boliye.'
@@ -288,6 +352,136 @@ export const App: React.FC = () => {
         setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: confirmMsg, time: nowTime }]);
         speak(confirmMsg, { lang });
         return;
+      }
+    }
+
+    // Let the LLM infer the user's goal from the utterance and current screen.
+    // Only the structured, allowlisted action returned by the server is executed.
+    const paymentConversationActive = conversationState !== 'idle';
+    const scannerRequested = isExplicitScannerRequest(text);
+    const routeToPaymentConversation = (paymentConversationActive || isPaymentConversationUtterance(text)) && !scannerRequested;
+    if (!pendingConfirmation.isOpen && !agentAlreadyDelegated && !routeToPaymentConversation) {
+      try {
+        const agentResponse = await fetch('/api/agent/understand', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            screen: isSettingsOpen ? 'settings' : isScannerOpen ? 'scanner' : ['wallet', 'settings', 'activity', 'family', 'merchant', 'scanner'].includes(currentRoute.path) ? currentRoute.path : 'wallet',
+            language: lang,
+            conversationState,
+            preferences: {
+              theme: themeMode,
+              outputMode,
+              speechSpeed: speed,
+              handsFree: isContinuousVoice,
+              scannerOpen: isScannerOpen,
+            },
+          }),
+        });
+        const decision = await agentResponse.json();
+        if (!agentResponse.ok) throw new Error(decision.error || 'The voice assistant could not understand that request.');
+
+        if (decision.action === 'navigate') {
+          setIsThinking(false);
+          const voicePage = ['settings', 'scanner'].includes(decision.destination);
+          pageVoiceSessionRef.current = voicePage;
+          autoListenAfterNavigationRef.current = ['wallet', 'settings', 'scanner'].includes(decision.destination);
+          setIsSettingsOpen(decision.destination === 'settings');
+          setSettingsAwaitingChoice(decision.destination === 'settings');
+          if (decision.destination === 'scanner') {
+            setIsScannerOpen(true);
+            if (scannerRequested && (paymentConversationActive || isPaymentConversationUtterance(text))) {
+              setAwaitingPaymentRecipient(true);
+              setPendingScanPaymentRequest(isPaymentConversationUtterance(text) ? text : null);
+            }
+          } else {
+            setIsScannerOpen(false);
+          }
+          if (decision.destination === 'activity') {
+            setCurrentRoute({ path: 'activity' });
+          } else if (decision.destination === 'family') {
+            setCurrentRoute({ path: 'family' });
+          } else if (decision.destination === 'merchant') {
+            setCurrentRoute({ path: 'merchant' });
+          } else {
+            setCurrentRoute({ path: 'wallet' });
+          }
+          const pagePrompt = decision.destination === 'scanner'
+            ? (lang === 'hi-IN'
+              ? 'QR scanner khul gaya. PayPal invoice ya recipient QR scan karein. QR scan ke baad main payment details bataungi. Ghar jaane ke liye wallet kholo boliye.'
+              : 'The QR scanner is open. Scan a PayPal invoice or recipient QR. I will explain the payment details after the scan. Say “go home” to return to Wallet.')
+            : decision.destination === 'settings'
+              ? (lang === 'hi-IN'
+                ? 'Settings khul gayi. Theme, language, bolne ki raftaar, voice ya screen reader, aur hands-free badalne ke liye boliye. Ghar jaane ke liye wallet kholo boliye.'
+                : 'Settings are open. Say what you want to change: theme, language, speech speed, voice or screen reader, or hands-free. Say “go home” to return to Wallet.')
+              : decision.destination === 'wallet'
+                ? (lang === 'hi-IN' ? 'Wallet home khul gaya. Kya karna chahenge?' : 'Wallet home is open. What would you like to do?')
+                : String(decision.replyText || 'Okay.');
+          const reply = pagePrompt;
+          setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+          if (decision.destination !== 'activity') speak(reply, { lang });
+          return;
+        }
+
+        if (decision.action === 'set_preference') {
+          const value = String(decision.value || '');
+          if (decision.preference === 'theme') setThemeMode(value as 'light' | 'dark');
+          else if (decision.preference === 'language') setLang(value as 'hi-IN' | 'en-IN');
+          else if (decision.preference === 'speech_speed') {
+            setSpeed(value === 'slower' ? Math.max(0.6, speed - 0.2) : value === 'faster' ? Math.min(1.6, speed + 0.2) : 1);
+          } else if (decision.preference === 'output_mode') setOutputMode(value as 'voice' | 'screen_reader');
+          else if (decision.preference === 'hands_free') {
+            const enabled = value === 'on';
+            setIsContinuousVoice(enabled);
+            continuousVoiceRef.current = enabled;
+          }
+          setSettingsAwaitingChoice(false);
+          setIsThinking(false);
+          const responseLanguage = decision.preference === 'language' ? value as 'hi-IN' | 'en-IN' : lang;
+          const reply = String(decision.replyText || 'Setting updated.');
+          setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+          speak(reply, { lang: responseLanguage });
+          return;
+        }
+
+        if (decision.action === 'clarify') {
+          if (isPaymentConversationUtterance(text)) {
+            // The transaction intent parser is better equipped to ask for a
+            // missing amount/payee and preserves the payment safety flow.
+            command = null;
+          } else {
+          setIsThinking(false);
+          setSettingsAwaitingChoice(isSettingsOpen);
+          const reply = String(decision.replyText || 'Please tell me a little more.');
+          setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+          speak(reply, { lang });
+          return;
+          }
+        }
+
+        if (decision.action === 'check_balance') command = 'check_paypal_balance';
+        else if (decision.action === 'repeat') command = 'repeat';
+        else if (decision.action === 'stop_listening') command = 'stop_listening';
+        else if (decision.action === 'activity_query') {
+          setIsThinking(false);
+          setIsSettingsOpen(false);
+          setPendingActivityRequest(text);
+          setCurrentRoute({ path: 'activity' });
+          return;
+        } else if (decision.action === 'delegate_conversation') command = null;
+      } catch (err) {
+        if (isPaymentConversationUtterance(text)) {
+          // Keep payments usable if the general navigation planner is down;
+          // /api/converse still applies payment parsing, risk checks and consent.
+        } else {
+        setIsThinking(false);
+        const reply = (err as Error).message || (lang === 'hi-IN' ? 'Voice assistant abhi available nahi hai.' : 'The voice assistant is unavailable right now.');
+        setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
+        speak(reply, { lang });
+        return;
+        }
       }
     }
 
@@ -309,9 +503,54 @@ export const App: React.FC = () => {
         speak(reply, { lang });
         return;
       }
+      if (command === 'language_en' || command === 'language_hi') {
+        const nextLang = command === 'language_hi' ? 'hi-IN' : 'en-IN';
+        setLang(nextLang);
+        const reply = command === 'language_hi' ? 'Ab main Hindi mein baat karungi.' : 'I will speak English now.';
+        setSettingsAwaitingChoice(false);
+        setIsThinking(false);
+        speak(isSettingsOpen ? `${reply} ${nextLang === 'hi-IN' ? 'Aur kya badalna hai? Theme ya bolne ki raftaar boliye. Band karne ke liye settings band karo boliye.' : 'What else would you like to change? Say theme or speech speed. Say close settings when you are done.'}` : reply, { lang: nextLang });
+        return;
+      }
+      if (command === 'slower' || command === 'faster' || command === 'normal_speed') {
+        const nextSpeed = command === 'slower' ? Math.max(0.6, speed - 0.2) : command === 'faster' ? Math.min(1.6, speed + 0.2) : 1;
+        setSpeed(nextSpeed);
+        const reply = command === 'slower'
+          ? (lang === 'hi-IN' ? 'Main dheere bolungi.' : 'I will speak more slowly.')
+          : command === 'faster'
+            ? (lang === 'hi-IN' ? 'Main tez bolungi.' : 'I will speak faster.')
+            : (lang === 'hi-IN' ? 'Bolne ki raftaar saamanya kar di.' : 'Speech speed is back to normal.');
+        setSettingsAwaitingChoice(false);
+        setIsThinking(false);
+        speak(isSettingsOpen ? `${reply} ${lang === 'hi-IN' ? 'Aur kya badalna hai? Theme ya language boliye, ya settings band karo boliye.' : 'What else would you like to change? Say theme or language, or close settings.'}` : reply, { lang });
+        return;
+      }
+      if (command === 'voice_mode' || command === 'screen_reader_mode') {
+        const nextMode = command === 'voice_mode' ? 'voice' : 'screen_reader';
+        setOutputMode(nextMode);
+        const reply = command === 'voice_mode'
+          ? (lang === 'hi-IN' ? 'Voice mode chalu hai.' : 'Voice mode is on.')
+          : (lang === 'hi-IN' ? 'Screen reader mode chalu hai.' : 'Screen reader mode is on.');
+        setSettingsAwaitingChoice(false);
+        setIsThinking(false);
+        speak(isSettingsOpen ? `${reply} ${lang === 'hi-IN' ? 'Aur kya badalna hai? Settings band karne ke liye settings band karo boliye.' : 'What else would you like to change? Say close settings when you are done.'}` : reply, { lang });
+        return;
+      }
+      if (command === 'handsfree_on' || command === 'handsfree_off') {
+        const enabled = command === 'handsfree_on';
+        setIsContinuousVoice(enabled);
+        continuousVoiceRef.current = enabled;
+        setSettingsAwaitingChoice(false);
+        const reply = enabled
+          ? (lang === 'hi-IN' ? 'Hands-free mode chalu hai.' : 'Hands-free listening is on.')
+          : (lang === 'hi-IN' ? 'Hands-free mode band hai. Dobara shuru karne ke liye mic dabayein.' : 'Hands-free listening is off. Tap the mic to start again.');
+        setIsThinking(false);
+        speak(isSettingsOpen && enabled ? `${reply} ${lang === 'hi-IN' ? 'Aur kya badalna hai? Theme ya language boliye.' : 'What else would you like to change? Say theme or language.'}` : reply, { lang });
+        return;
+      }
       if (command === 'check_paypal_balance') {
         try {
-          const res = await fetch('/api/family/paypal-balance');
+          const res = await fetch('/api/family/wallet-paypal-balance');
           const data = await res.json();
           if (!res.ok || !data.success) throw new Error(data.error || 'PayPal balance is unavailable.');
           const available = new Intl.NumberFormat('en-US', {
@@ -326,11 +565,13 @@ export const App: React.FC = () => {
           const reply = lang === 'hi-IN'
             ? `PayPal Sandbox business account mein ${available} available hain. Report teen ghante tak purani ho sakti hai.${refreshed}`
             : `The PayPal Sandbox business account has ${available} available. This report may be up to three hours old.${refreshed}`;
+          window.dispatchEvent(new CustomEvent('awaaz-paypal-balance', { detail: { balance: available } }));
           setIsThinking(false);
           setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
           speak(reply, { lang });
         } catch (err) {
           const reply = (err as Error).message || (lang === 'hi-IN' ? 'PayPal balance nahi mil saka.' : 'Could not read the PayPal balance.');
+          window.dispatchEvent(new CustomEvent('awaaz-paypal-balance', { detail: { error: reply } }));
           setIsThinking(false);
           setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: reply, time: nowTime }]);
           speak(reply, { lang });
@@ -340,27 +581,39 @@ export const App: React.FC = () => {
 
       let reply = '';
       if (command === 'help') {
-        reply = lang === 'hi-IN'
-          ? 'Aap bol sakte hain: scanner kholo, activity dikhao, family kholo, settings kholo, ghar jao, balance batao, PayPal balance batao, history sunao, ya kisi contact ko paise bhejo. Sunna rokne ke liye stop listening boliye.'
-          : 'You can say: open scanner, show activity, open family, open settings, go home, check my wallet balance, check my PayPal balance, read my history, or send money to a contact. Say stop listening to pause voice input.';
+        reply = isSettingsOpen
+          ? (lang === 'hi-IN'
+            ? 'Theme, language, bolne ki raftaar, voice mode, screen reader mode, ya hands-free badalne ke liye uska naam boliye. Settings band karne ke liye settings band karo boliye.'
+            : 'Say theme, language, speech speed, voice mode, screen reader mode, or hands-free to change it. Say close settings when you are done.')
+          : lang === 'hi-IN'
+          ? 'Payment ke liye naam aur dollar boliye. Scanner kholo, PayPal balance batao, hisaab sunao, family portal kholo, dobara bolo, Hindi ya English bolo, dheere bolo, settings kholo, ya ghar jao.'
+          : 'Say what you want: send dollars to a contact, open scanner, check PayPal balance, read history, open the family portal, repeat what I said, switch language, speak slower, open settings, or go home.';
       } else if (command === 'open_scanner') {
         setIsScannerOpen(true);
         setIsSettingsOpen(false);
+        pageVoiceSessionRef.current = true;
         reply = lang === 'hi-IN'
-          ? 'QR scanner khul gaya. Camera shuru karne ke liye Enable camera button dabayein. Band karne ke liye cancel scanner boliye.'
-          : 'The QR scanner is open. Tap Enable camera and scan to start the camera. Say close scanner to exit.';
+          ? 'QR scanner khol diya. Camera permission maange to allow karein. Code ko camera ke saamne rakhein. Band karne ke liye scanner band karo boliye.'
+          : 'Opening the QR scanner and camera. Allow camera access if asked, then point it at the code. Say close scanner to exit.';
       } else if (command === 'close_scanner') {
         if (isScannerOpen) {
           setIsScannerOpen(false);
+          pageVoiceSessionRef.current = false;
+          autoListenAfterNavigationRef.current = true;
           reply = lang === 'hi-IN' ? 'Scanner band kar diya.' : 'Scanner closed.';
         } else {
           reply = lang === 'hi-IN' ? 'Scanner abhi khula nahi hai.' : 'The scanner is not open.';
         }
+      } else if (command === 'retry_scanner') {
+        setIsScannerOpen(true);
+        setScannerRestartToken((current) => current + 1);
+        reply = lang === 'hi-IN' ? 'Camera dobara shuru kar rahi hoon.' : 'Restarting the camera now.';
       } else if (command === 'open_activity') {
         setIsScannerOpen(false);
         setIsSettingsOpen(false);
+        pageVoiceSessionRef.current = false;
         setCurrentRoute({ path: 'activity' });
-        reply = lang === 'hi-IN' ? 'Recent activity khol raha hoon.' : 'Opening recent activity.';
+        reply = lang === 'hi-IN' ? 'Aapka hisaab khol rahi hoon.' : 'Opening your recent activity.';
       } else if (command === 'open_family') {
         setIsScannerOpen(false);
         setIsSettingsOpen(false);
@@ -368,11 +621,17 @@ export const App: React.FC = () => {
         reply = lang === 'hi-IN' ? 'Family dashboard khol raha hoon.' : 'Opening the family dashboard.';
       } else if (command === 'open_settings') {
         setIsScannerOpen(false);
+        pageVoiceSessionRef.current = true;
         if (currentRoute.path !== 'wallet') setCurrentRoute({ path: 'wallet' });
         setIsSettingsOpen(true);
-        reply = lang === 'hi-IN' ? 'Settings khol raha hoon.' : 'Opening settings.';
+        setSettingsAwaitingChoice(true);
+        reply = lang === 'hi-IN'
+          ? 'Settings khol di. Aap kya badalna chahte hain? Light ya dark theme, Hindi ya English, bolne ki raftaar, voice mode, ya hands-free boliye.'
+          : 'Settings are open. What would you like to change? Say light or dark theme, Hindi or English, speech speed, voice mode, or hands-free.';
       } else if (command === 'close_settings') {
         setIsSettingsOpen(false);
+        setSettingsAwaitingChoice(false);
+        pageVoiceSessionRef.current = false;
         reply = lang === 'hi-IN' ? 'Settings band kar di.' : 'Settings closed.';
       } else if (command === 'open_merchant') {
         setIsScannerOpen(false);
@@ -380,11 +639,14 @@ export const App: React.FC = () => {
         setCurrentRoute({ path: 'merchant' });
         reply = lang === 'hi-IN' ? 'Merchant portal khol raha hoon.' : 'Opening the merchant portal.';
       } else if (command === 'go_home' || command === 'go_back') {
+        pageVoiceSessionRef.current = false;
+        autoListenAfterNavigationRef.current = true;
         if (isScannerOpen) {
           setIsScannerOpen(false);
           reply = lang === 'hi-IN' ? 'Scanner band karke wallet par wapas aa gaya.' : 'Closed the scanner and returned to the wallet.';
         } else if (isSettingsOpen) {
           setIsSettingsOpen(false);
+          setSettingsAwaitingChoice(false);
           reply = lang === 'hi-IN' ? 'Settings band karke wallet par wapas aa gaya.' : 'Closed settings and returned to the wallet.';
         } else if (currentRoute.path !== 'wallet') {
           setCurrentRoute({ path: 'wallet' });
@@ -401,7 +663,7 @@ export const App: React.FC = () => {
         text: reply,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }]);
-      speak(reply, { lang });
+        if (command !== 'open_activity') speak(reply, { lang });
       return;
     }
 
@@ -432,21 +694,6 @@ export const App: React.FC = () => {
 
       setIsThinking(false);
 
-      if (res.status === 401) {
-        setAuthState('unauthenticated');
-        triggerHaptic('error');
-        const unauthMsg =
-          lang === 'hi-IN'
-            ? 'सुरक्षा के लिए कृपया पहले फिंगरप्रिंट से लॉगिन करें।'
-            : 'Please log in with your fingerprint first for safety.';
-        speak(unauthMsg, { lang });
-        return;
-      }
-
-      if (!res.ok) {
-        throw new Error(`Server returned HTTP ${res.status}`);
-      }
-
       const data = (await res.json()) as {
         replyText: string;
         replyLanguage: 'hi' | 'en';
@@ -454,6 +701,7 @@ export const App: React.FC = () => {
         context?: {
           pendingPayeeName?: string;
           pendingAmount?: number;
+          isNewPayee?: boolean;
           scamRisk?: string;
         };
         actions?: {
@@ -464,14 +712,38 @@ export const App: React.FC = () => {
           provider?: string;
         };
       };
+      if (!res.ok) throw new Error((data as { error?: string }).error || `Server returned HTTP ${res.status}`);
+      setConversationState(data.state);
 
       // Detect Blocked payment state
       if (data.state === 'idle' && (data.replyText.includes('scam') || data.replyText.includes('rok') || data.replyText.includes('blocked'))) {
         triggerHaptic('blocked');
       }
 
+      if (data.state === 'awaiting_payment_recipient') {
+        setAwaitingPaymentRecipient(true);
+        setScannerEmailEntryOpen(scannerEmailEntryOpen);
+        setIsScannerOpen(true);
+        pageVoiceSessionRef.current = true;
+        setScanError(null);
+        const replyLangCode = data.replyLanguage === 'en' ? 'en-IN' : 'hi-IN';
+        setTranscripts((prev) => [...prev, {
+          id: `a-${Date.now()}`, sender: 'assistant', text: data.replyText,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }]);
+        speak(data.replyText, { lang: replyLangCode });
+        return;
+      }
+
       // Check if server asks for confirmation
       if (data.state === 'awaiting_confirmation') {
+        if (awaitingPaymentRecipient || isScannerOpen) {
+          setIsScannerOpen(false);
+          setScannerEmailEntryOpen(false);
+          setAwaitingPaymentRecipient(false);
+          pageVoiceSessionRef.current = false;
+          autoListenAfterNavigationRef.current = true;
+        }
         const payeeName = data.context?.pendingPayeeName || 'Recipient';
         const amount = data.context?.pendingAmount || 0;
         setPendingConfirmation({
@@ -479,7 +751,10 @@ export const App: React.FC = () => {
           payeeName,
           amount,
           transactionId: data.actions?.transactionId,
-          contextSentence: lang === 'hi-IN' ? 'एक सुरक्षित कांटेक्ट को।' : 'To a verified recipient.',
+          warningText: data.context?.isNewPayee ? 'New recipient: verify the exact PayPal email. Family approval or safety checks may apply.' : undefined,
+          contextSentence: data.context?.isNewPayee
+            ? `New recipient PayPal email: ${payeeName}.`
+            : lang === 'hi-IN' ? 'एक सुरक्षित कांटेक्ट को।' : 'To a verified recipient.',
         });
         const replyLangCode = data.replyLanguage === 'en' ? 'en-IN' : 'hi-IN';
         speak(data.replyText, { lang: replyLangCode });
@@ -496,9 +771,22 @@ export const App: React.FC = () => {
 
       setTranscripts((prev) => [...prev, assistantEntry]);
       speak(data.replyText, { lang: replyLangCode });
-    } catch {
+    } catch (err) {
       setIsThinking(false);
       triggerHaptic('error');
+      if (awaitingPaymentRecipient) {
+        setAwaitingPaymentRecipient(true);
+        setIsScannerOpen(true);
+        setScannerEmailEntryOpen(true);
+        pageVoiceSessionRef.current = true;
+        const emailError = (err as Error).message || 'Could not prepare this recipient email.';
+        const retryMessage = lang === 'hi-IN'
+          ? `Email se payment taiyaar nahi ho saka. ${emailError} Email dobara check karke try karein.`
+          : `I could not prepare the payment using that email. ${emailError} Please check the address and try again.`;
+        setTranscripts((prev) => [...prev, { id: `a-${Date.now()}`, sender: 'assistant', text: retryMessage, time: nowTime }]);
+        speak(retryMessage, { lang });
+        return;
+      }
       const fallbackText =
         lang === 'hi-IN'
           ? 'Awaaz Pay se jawab nahi mila. Payment dobara karne se pehle Recent Activity check karein, taaki galti se do baar na bhejein. Internet check karke help bol sakte hain.'
@@ -540,6 +828,8 @@ export const App: React.FC = () => {
   const handleMicClick = async () => {
     setMicPermissionError(null);
     if (isListening) {
+      setIsContinuousVoice(false);
+      continuousVoiceRef.current = false;
       toggleListening();
       return;
     }
@@ -565,8 +855,8 @@ export const App: React.FC = () => {
         stream.getTracks().forEach((track) => track.stop());
         setMicPermissionReady(true);
         const message = lang === 'hi-IN'
-          ? 'Microphone permission mil gayi. Ab boliye.'
-          : 'Microphone permission granted. Please speak now.';
+          ? 'Microphone taiyaar hai. Ab boliye, main sun rahi hoon.'
+          : 'The microphone is ready. Go ahead and speak.';
         setMicPermissionError(message);
         speak(message, { lang, onEnd: startListening });
       } catch (err) {
@@ -608,111 +898,6 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isListening]);
-
-  const handleTextSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!textInput.trim()) return;
-    const txt = textInput.trim();
-    setTextInput('');
-    handleSpeechResult(txt);
-  };
-
-  // Passkey Login Flow
-  const handlePasskeyLogin = async () => {
-    try {
-      setIsPasskeyLoading(true);
-      setAuthError(null);
-
-      const guidance =
-        lang === 'hi-IN' ? 'अपनी उंगली सेंसर पर रखें।' : 'Please place your finger on the sensor.';
-      speak(guidance, { lang });
-
-      const optRes = await fetch('/api/auth/login-options', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'user_meena' }),
-        credentials: 'include',
-      });
-
-      if (!optRes.ok) throw new Error('Failed to fetch login options');
-      const options = await optRes.json();
-      const authResp = await startAuthentication({ optionsJSON: options });
-
-      const verifyRes = await fetch('/api/auth/verify-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'user_meena', response: authResp }),
-        credentials: 'include',
-      });
-
-      if (!verifyRes.ok) throw new Error('Verification failed');
-      const verifyData = await verifyRes.json();
-      if (verifyData.verified) {
-        triggerHaptic('confirmed');
-        setAuthState('authenticated');
-        const successMsg =
-          lang === 'hi-IN' ? 'लॉगिन सफल रहा! बोलिए, मैं सुन रही हूँ।' : 'Login successful! Speak, I am listening.';
-        speak(successMsg, { lang });
-      }
-    } catch (err) {
-      triggerHaptic('error');
-      const errMsg = (err as Error).message;
-      setAuthError(errMsg);
-      const spokenErr =
-        lang === 'hi-IN' ? 'लॉगिन नहीं हो पाया। दोबारा कोशिश करें।' : 'Fingerprint login failed. Please try again.';
-      speak(spokenErr, { lang });
-    } finally {
-      setIsPasskeyLoading(false);
-    }
-  };
-
-  const handlePasskeyRegister = async () => {
-    try {
-      setIsPasskeyLoading(true);
-      setAuthError(null);
-
-      const guidance =
-        lang === 'hi-IN'
-          ? 'नया फिंगरप्रिंट जोड़ने के लिए उंगली सेंसर पर रखें।'
-          : 'Place your finger on the sensor to register passkey.';
-      speak(guidance, { lang });
-
-      const optRes = await fetch('/api/auth/register-options', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'user_meena' }),
-        credentials: 'include',
-      });
-
-      if (!optRes.ok) throw new Error('Failed to fetch registration options');
-      const options = await optRes.json();
-      const regResp = await startRegistration({ optionsJSON: options });
-
-      const verifyRes = await fetch('/api/auth/verify-registration', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'user_meena', response: regResp }),
-        credentials: 'include',
-      });
-
-      if (!verifyRes.ok) throw new Error('Registration verification failed');
-      const verifyData = await verifyRes.json();
-      if (verifyData.verified) {
-        triggerHaptic('confirmed');
-        setAuthState('authenticated');
-        const successMsg =
-          lang === 'hi-IN'
-            ? 'फिंगरप्रिंट रजिस्टर हो गया! अब आप लॉगिन हैं।'
-            : 'Passkey registered successfully! You are now logged in.';
-        speak(successMsg, { lang });
-      }
-    } catch (err) {
-      triggerHaptic('error');
-      setAuthError((err as Error).message);
-    } finally {
-      setIsPasskeyLoading(false);
-    }
-  };
 
   // Execution when user confirms payment
   const handleExecutePayment = async () => {
@@ -774,7 +959,7 @@ export const App: React.FC = () => {
         outcome.paypalStatus ? `PayPal reports ${outcome.paypalStatus}.` : '',
       ].filter(Boolean).join(' ');
       const completed = outcome.status === 'completed';
-      const approvalPending = outcome.status === 'need_guardian_approval';
+      const approvalPending = outcome.status === 'awaiting_approval' || outcome.status === 'need_guardian_approval';
       const pending = outcome.status === 'processing' || approvalPending;
       setPendingConfirmation((prev) => ({
         ...prev,
@@ -794,7 +979,7 @@ export const App: React.FC = () => {
         ? `${lang === 'hi-IN' ? 'PayPal Sandbox test payment safal raha. Asli paise nahi bheje gaye.' : 'PayPal Sandbox test payment completed. No real money was moved.'} ${statusMessage}`
         : pending
           ? `${lang === 'hi-IN' ? 'PayPal Sandbox payment abhi confirm nahi hua. Dobara payment na karein.' : 'PayPal Sandbox has not confirmed this payment yet. Do not retry it.'} ${statusMessage}`
-          : `${lang === 'hi-IN' ? 'PayPal Sandbox payment fail hua. Aapka reserved paisa wallet mein wapas aa gaya.' : 'The PayPal Sandbox payment failed. Any reserved amount was returned to your wallet.'} ${statusMessage}`;
+          : `${lang === 'hi-IN' ? 'PayPal Sandbox payment safal nahi hua. Dobara bhejne se pehle PayPal activity check karein.' : 'PayPal Sandbox did not confirm the payment. Check PayPal activity before retrying.'} ${statusMessage}`;
       speak(spokenStatus.trim(), { lang });
     } catch (err) {
       triggerHaptic('error');
@@ -803,8 +988,8 @@ export const App: React.FC = () => {
         isProcessing: false,
         isFailed: true,
         statusMessage: (err as Error).message || (lang === 'hi-IN'
-          ? 'पेमेंट पूरा नहीं हो सका। पैसा वापस जोड़ दिया गया है।'
-          : 'Payment did not complete. Any reserved amount was returned to your wallet.'),
+          ? 'Payment ka result confirm nahi hua. Dobara bhejne se pehle PayPal activity check karein.'
+          : 'The payment result could not be confirmed. Check PayPal activity before retrying.'),
       }));
       speak((err as Error).message || 'Payment did not complete.', { lang });
     }
@@ -830,6 +1015,54 @@ export const App: React.FC = () => {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Could not add this recipient');
+        if (awaitingPaymentRecipient) {
+          const scanPaymentText = pendingScanPaymentRequest
+            ? `${pendingScanPaymentRequest}. PayPal recipient email: ${recipient.email}`
+            : `Send money to ${recipient.email}`;
+          const paymentRes = await fetch('/api/converse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              sessionId: sessionIdRef.current,
+              text: scanPaymentText,
+              userId: 'user_meena',
+              lang: lang === 'hi-IN' ? 'hi' : 'en',
+            }),
+          });
+          const paymentData = await paymentRes.json();
+          if (!paymentRes.ok) throw new Error(paymentData.error || 'Could not prepare this payment');
+          setConversationState(paymentData.state);
+          setPendingScanPaymentRequest(null);
+          if (paymentData.state === 'awaiting_payment_recipient') {
+            setAwaitingPaymentRecipient(true);
+            setScannerEmailEntryOpen(false);
+            setIsScannerOpen(true);
+            pageVoiceSessionRef.current = true;
+            speak(paymentData.replyText, { lang });
+            return;
+          }
+          setAwaitingPaymentRecipient(false);
+          if (paymentData.state === 'awaiting_confirmation') {
+            pageVoiceSessionRef.current = false;
+            autoListenAfterNavigationRef.current = true;
+            setPendingConfirmation({
+              isOpen: true,
+              payeeName: paymentData.context?.pendingPayeeName || recipient.name,
+              amount: paymentData.context?.pendingAmount || 0,
+              transactionId: paymentData.actions?.transactionId,
+              warningText: 'Check this exact recipient email before confirming.',
+              contextSentence: `Unverified PayPal recipient email: ${recipient.email}.`,
+            });
+          }
+          const paymentReply = paymentData.replyText || 'Recipient details received.';
+          setTranscripts((prev) => [...prev, {
+            id: `a-${Date.now()}`, sender: 'assistant', text: paymentReply,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          }]);
+          speak(paymentReply, { lang: paymentData.replyLanguage === 'en' ? 'en-IN' : 'hi-IN' });
+          return;
+        }
         const message = lang === 'hi-IN'
             ? (data.inCoolingOff
             ? `QR code mein naam ${recipient.name} aur PayPal email ${recipient.email} likha hai. Yeh jankari abhi PayPal se verify nahi hui hai. Naya payee suraksha ke liye cooling-off mein rakha hai. Is dauran payment ke liye parivaar ki manzoori zaroori hogi. Bhejne se pehle naam aur email us vyakti se verify karein.`
@@ -858,6 +1091,8 @@ export const App: React.FC = () => {
       });
 
       if (res.ok) {
+        setAwaitingPaymentRecipient(false);
+        setPendingScanPaymentRequest(null);
         const inv = await res.json();
         setPendingConfirmation({
           isOpen: true,
@@ -916,16 +1151,32 @@ export const App: React.FC = () => {
             : 'PayPal Sandbox confirmed the test payment. No real money was moved.', { lang });
           stopped = true;
         } else if (tx.status === 'failed') {
+          const wasDenied = data.approvalStatus === 'denied';
           setPendingConfirmation((prev) => ({
             ...prev,
             isPending: false,
             isFailed: true,
-            statusMessage: 'PayPal did not complete the payout. The reserved wallet amount was returned.',
+            statusMessage: wasDenied
+              ? 'Your family member denied this payment. No PayPal payout was sent.'
+              : 'PayPal did not complete the payout. Check PayPal activity before retrying.',
           }));
-          speak(lang === 'hi-IN'
-            ? 'PayPal ne payment fail kiya. Rakam wallet mein wapas aa gayi.'
-            : 'PayPal failed the payout. The reserved amount was returned to your wallet.', { lang });
+          speak(wasDenied
+            ? (lang === 'hi-IN'
+              ? 'Aapki family ne payment manzoor nahi ki. PayPal ko payout nahi bheja gaya.'
+              : 'Your family denied the payment. No PayPal payout was sent.')
+            : (lang === 'hi-IN'
+              ? 'PayPal payout safal nahi hua. Dobara bhejne se pehle PayPal activity check karein.'
+              : 'PayPal did not complete the payout. Check PayPal activity before retrying.'), { lang });
           stopped = true;
+        } else if (tx.status === 'awaiting_approval') {
+          setPendingConfirmation((prev) => ({
+            ...prev,
+            isApprovalPending: true,
+            statusMessage: attempts >= 10
+              ? 'Family approval is still pending. No PayPal payout has been sent. Check Family Activity later; do not retry.'
+              : 'Waiting for family approval. No PayPal payout has been sent.',
+          }));
+          if (attempts >= 10) stopped = true;
         } else if (tx.status === 'processing' && data.paypalStatus) {
           setPendingConfirmation((prev) => ({
             ...prev,
@@ -971,11 +1222,13 @@ export const App: React.FC = () => {
       ? lang === 'hi-IN' ? 'सोच रही हूँ...' : 'Thinking...'
       : isSpeaking
         ? lang === 'hi-IN' ? 'बोल रही हूँ...' : 'Speaking...'
-        : lang === 'hi-IN' ? 'तैयार' : 'Ready';
+        : lang === 'hi-IN'
+          ? micPermissionReady ? 'बोलिए, मैं सुन रही हूँ' : 'शुरू करने के लिए माइक दबाएँ'
+          : micPermissionReady ? 'Speak naturally' : 'Tap the mic once to begin';
 
   // Subpage routes
   if (currentRoute.path === 'approve' && currentRoute.token) {
-    return <GuardianApprovePage token={currentRoute.token} />;
+    return <FamilyGate onExit={() => setCurrentRoute({ path: 'wallet' })}><GuardianApprovePage token={currentRoute.token} /></FamilyGate>;
   }
   if (currentRoute.path === 'onboarding') {
     return <OnboardingWizard />;
@@ -984,13 +1237,61 @@ export const App: React.FC = () => {
     return <MerchantDemoPage />;
   }
   if (currentRoute.path === 'family') {
-    return <FamilyDashboardPage />;
+    return <FamilyGate onExit={() => setCurrentRoute({ path: 'wallet' })}><FamilyDashboardPage /></FamilyGate>;
   }
   if (currentRoute.path === 'design-preview') {
     return <DesignPreviewPage />;
   }
   if (currentRoute.path === 'activity') {
-    return <ActivityScreen onBack={() => setCurrentRoute({ path: 'wallet' })} speak={speak} lang={lang} />;
+    return (
+      <ActivityScreen
+        lang={lang}
+        autoStartVoice
+        initialVoiceRequest={pendingActivityRequest}
+        onInitialVoiceRequestHandled={() => setPendingActivityRequest(null)}
+        onGoHome={() => {
+          pageVoiceSessionRef.current = false;
+          setCurrentRoute({ path: 'wallet' });
+          window.setTimeout(() => startListeningRef.current(), 350);
+        }}
+        onNavigate={(destination) => {
+          if (destination === 'settings') {
+            pageVoiceSessionRef.current = true;
+            setCurrentRoute({ path: 'wallet' });
+            setIsSettingsOpen(true);
+            setSettingsAwaitingChoice(true);
+            window.setTimeout(() => startListeningRef.current(), 350);
+          } else if (destination === 'scanner') {
+            pageVoiceSessionRef.current = true;
+            setCurrentRoute({ path: 'wallet' });
+            setIsScannerOpen(true);
+            window.setTimeout(() => startListeningRef.current(), 350);
+          } else if (destination === 'activity') {
+            pageVoiceSessionRef.current = false;
+            setCurrentRoute({ path: 'activity' });
+          } else {
+            pageVoiceSessionRef.current = false;
+            setCurrentRoute({ path: destination });
+            if (destination === 'wallet') window.setTimeout(() => startListeningRef.current(), 350);
+          }
+        }}
+        onSetPreference={(preference, value) => {
+          if (preference === 'theme') setThemeMode(value as 'light' | 'dark');
+          else if (preference === 'language') setLang(value as 'hi-IN' | 'en-IN');
+          else if (preference === 'speech_speed') setSpeed(value === 'slower' ? Math.max(0.6, speed - 0.2) : value === 'faster' ? Math.min(1.6, speed + 0.2) : 1);
+          else if (preference === 'output_mode') setOutputMode(value as 'voice' | 'screen_reader');
+          else if (preference === 'hands_free') {
+            const enabled = value === 'on';
+            setIsContinuousVoice(enabled);
+            continuousVoiceRef.current = enabled;
+          }
+        }}
+        onDelegateConversation={(utterance) => {
+          setCurrentRoute({ path: 'wallet' });
+          void handleSpeechResult(utterance, true);
+        }}
+      />
+    );
   }
 
   // Confirm Payment Screen (Task C)
@@ -1011,8 +1312,6 @@ export const App: React.FC = () => {
         statusMessage={pendingConfirmation.statusMessage}
         transactionId={pendingConfirmation.transactionId}
         paypalBatchId={pendingConfirmation.paypalBatchId}
-        onConfirm={handleExecutePayment}
-        onCancel={() => setPendingConfirmation({ isOpen: false, payeeName: '', amount: 0 })}
         speak={speak}
         lang={lang}
         isListening={isListening}
@@ -1029,18 +1328,9 @@ export const App: React.FC = () => {
             <DotWordmark size={150} />
             <button
               type="button"
-              onClick={() => setIsSettingsOpen(true)}
-              style={{
-                minHeight: '48px',
-                padding: '0.5rem 1rem',
-                borderRadius: 'var(--radius-pill)',
-                border: '2px solid var(--border)',
-                backgroundColor: 'var(--surface)',
-                color: 'var(--text)',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-              aria-label="Open settings"
+              onClick={() => { setSettingsAwaitingChoice(true); setIsSettingsOpen(true); }}
+              style={{ minHeight: '48px', padding: '0.5rem 1rem', borderRadius: 'var(--radius-pill)', border: '2px solid var(--border)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: 700, cursor: 'pointer' }}
+              aria-label={lang === 'hi-IN' ? 'Settings kholein' : 'Open settings'}
             >
               ⚙️ {lang === 'hi-IN' ? 'सेटिंग्स' : 'Settings'}
             </button>
@@ -1066,78 +1356,36 @@ export const App: React.FC = () => {
             {statusOneLine}
           </div>
 
-          {/* Repeat Button (Full-width pill, min 64px) */}
-          <BigButton
-            variant="secondary"
-            onClick={repeatLastReply}
-            aria-label={lang === 'hi-IN' ? 'पिछला जवाब दोहराएं' : 'Repeat last reply'}
-          >
-            🔁 {lang === 'hi-IN' ? 'दोहराओ (Repeat)' : 'Repeat'}
-          </BigButton>
-
-          {/* Bottom link row: Scan a QR code, Activity, Family */}
-          <nav
-            aria-label="Secondary actions"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: '0.5rem',
-              width: '100%',
-              marginTop: '0.5rem',
-            }}
-          >
+          <BodyText muted style={{ textAlign: 'center' }}>
+            {lang === 'hi-IN'
+              ? 'Scanner kholo, hisaab sunao, PayPal balance batao, family portal kholo, settings kholo, ya “dobara bolo” kahein.'
+              : 'Say “open scanner”, “read my history”, “check PayPal balance”, “open family portal”, “open settings”, or “repeat what you said”.'}
+          </BodyText>
+          <nav aria-label={lang === 'hi-IN' ? 'App pages' : 'App shortcuts'} style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
             <button
               type="button"
-              onClick={() => setIsScannerOpen(true)}
-              style={{
-                minHeight: 'var(--min-target, 64px)',
-                borderRadius: 'var(--radius-pill)',
-                border: '2px solid var(--border)',
-                backgroundColor: 'var(--surface)',
-                color: 'var(--text)',
-                fontWeight: 700,
-                fontSize: '1rem',
-                cursor: 'pointer',
-              }}
+              onClick={() => { setScanError(null); setIsScannerOpen(true); }}
+              aria-label={lang === 'hi-IN' ? 'QR scanner kholein' : 'Open QR scanner'}
+              style={{ minHeight: 'var(--min-target, 64px)', borderRadius: 'var(--radius-pill)', border: '2px solid var(--border)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: 700, fontSize: '1rem', cursor: 'pointer' }}
             >
               📷 {lang === 'hi-IN' ? 'QR स्कैन' : 'Scan QR'}
             </button>
-
             <button
               type="button"
-              onClick={() => setCurrentRoute({ path: 'activity' })}
-              style={{
-                minHeight: 'var(--min-target, 64px)',
-                borderRadius: 'var(--radius-pill)',
-                border: '2px solid var(--border)',
-                backgroundColor: 'var(--surface)',
-                color: 'var(--text)',
-                fontWeight: 700,
-                fontSize: '1rem',
-                cursor: 'pointer',
-              }}
+              onClick={() => { setPendingActivityRequest(null); setCurrentRoute({ path: 'activity' }); }}
+              aria-label={lang === 'hi-IN' ? 'Recent activity kholein' : 'Open Recent Activity'}
+              style={{ minHeight: 'var(--min-target, 64px)', borderRadius: 'var(--radius-pill)', border: '2px solid var(--border)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: 700, fontSize: '1rem', cursor: 'pointer' }}
             >
               📜 {lang === 'hi-IN' ? 'हिसाब' : 'Activity'}
             </button>
-
-            <a
-              href="/family"
-              style={{
-                minHeight: 'var(--min-target, 64px)',
-                borderRadius: 'var(--radius-pill)',
-                border: '2px solid var(--border)',
-                backgroundColor: 'var(--surface)',
-                color: 'var(--text)',
-                fontWeight: 700,
-                fontSize: '1rem',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textDecoration: 'none',
-              }}
+            <button
+              type="button"
+              onClick={() => setCurrentRoute({ path: 'family' })}
+              aria-label={lang === 'hi-IN' ? 'Password protected family portal kholein' : 'Open password-protected Family portal'}
+              style={{ minHeight: 'var(--min-target, 64px)', borderRadius: 'var(--radius-pill)', border: '2px solid var(--border)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: 700, fontSize: '1rem', cursor: 'pointer' }}
             >
               🛡️ {lang === 'hi-IN' ? 'परिवार' : 'Family'}
-            </a>
+            </button>
           </nav>
         </div>
       }
@@ -1157,49 +1405,6 @@ export const App: React.FC = () => {
             ? 'Mobile par microphone aur camera ke liye app ka HTTPS link kholein. Local network ka http:// address kaam nahi karega.'
             : 'Microphone and camera need a secure connection on mobile. Open the app’s HTTPS link; a local network http:// address will not work.'}
         </StatusBanner>
-      )}
-
-      {/* Unauthenticated Security Gate */}
-      {authState === 'unauthenticated' && (
-        <section
-          style={{
-            width: '100%',
-            padding: '1.5rem',
-            backgroundColor: 'var(--surface)',
-            border: '2px solid var(--border)',
-            borderRadius: 'var(--radius-card, 16px)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '1rem',
-          }}
-          aria-label="Fingerprint passkey login"
-        >
-          <Headline level={2}>
-            {lang === 'hi-IN' ? 'सुरक्षा लॉक (Passkey)' : 'Security Lock (Passkey)'}
-          </Headline>
-          <BodyText muted>
-            {lang === 'hi-IN'
-              ? 'आवाज़ पे का उपयोग करने के लिए अपनी उंगली सेंसर पर रखें।'
-              : 'Please place your finger on the sensor to log in.'}
-          </BodyText>
-          <BigButton
-            variant="primary"
-            onClick={handlePasskeyLogin}
-            disabled={isPasskeyLoading}
-            loading={isPasskeyLoading}
-            loadingText="Verifying passkey..."
-          >
-            👆 {lang === 'hi-IN' ? 'फिंगरप्रिंट से लॉगिन करें' : 'Login with Fingerprint'}
-          </BigButton>
-          <BigButton
-            variant="secondary"
-            onClick={handlePasskeyRegister}
-            disabled={isPasskeyLoading}
-          >
-            ➕ {lang === 'hi-IN' ? 'नया फिंगरप्रिंट जोड़ें' : 'Register New Passkey'}
-          </BigButton>
-          {authError && <StatusBanner variant="danger" label="Error">{authError}</StatusBanner>}
-        </section>
       )}
 
       {/* Very large circular mic button (~60% viewport width, max 280px) surrounded by DotRing */}
@@ -1270,61 +1475,11 @@ export const App: React.FC = () => {
         )}
 
         {(error || scanError || micPermissionError) && (
-          <StatusBanner variant={micPermissionReady && micPermissionError ? 'success' : 'danger'} label={micPermissionReady && micPermissionError ? 'Ready' : 'Error'}>
+          <StatusBanner variant={micPermissionReady && micPermissionError ? 'success' : 'danger'} label={micPermissionReady && micPermissionError ? 'Microphone' : 'Error'}>
             {error || scanError || micPermissionError}
           </StatusBanner>
         )}
 
-        {/* Fallback Text Input & Type Option */}
-        <form
-          onSubmit={handleTextSubmit}
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            width: '100%',
-            maxWidth: '520px',
-            marginTop: '1rem',
-          }}
-          aria-label="Text message input"
-        >
-          <input
-            type="text"
-            value={textInput}
-            onChange={(e) => setTextInput(e.target.value)}
-            placeholder={
-              lang === 'hi-IN'
-                ? 'या यहाँ टाइप करें (उदा. रमेश को 500 भेजो)'
-                : 'Or type here (e.g. Send 500 to Ramesh)'
-            }
-            aria-label={lang === 'hi-IN' ? 'आदेश यहाँ टाइप करें' : 'Type voice command text'}
-            style={{
-              flex: 1,
-              minHeight: '48px',
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-pill)',
-              border: '2px solid var(--border)',
-              backgroundColor: 'var(--surface)',
-              color: 'var(--text)',
-              fontSize: '1rem',
-            }}
-          />
-          <button
-            type="submit"
-            style={{
-              minHeight: '48px',
-              padding: '0.75rem 1.25rem',
-              borderRadius: 'var(--radius-pill)',
-              backgroundColor: 'var(--accent)',
-              color: 'var(--accent-text)',
-              border: 'none',
-              fontWeight: 700,
-              fontSize: '1rem',
-              cursor: 'pointer',
-            }}
-          >
-            {lang === 'hi-IN' ? 'भेजें' : 'Send'}
-          </button>
-        </form>
       </section>
 
       {/* Transcript of Conversation in Large Text (aria-live region) */}
@@ -1368,8 +1523,19 @@ export const App: React.FC = () => {
       {/* QR Scanner Modal (Task D) */}
       <QRScannerModal
         isOpen={isScannerOpen}
-        onClose={() => setIsScannerOpen(false)}
+        cameraCommand={scannerRestartToken}
         onScanSuccess={handleScanSuccess}
+        allowEmailRecipient={awaitingPaymentRecipient}
+        emailEntryOpen={scannerEmailEntryOpen}
+        onEmailEntryOpenChange={setScannerEmailEntryOpen}
+        onUseEmail={(email) => handleSpeechResult(email, true)}
+        onReturnHome={() => {
+          stopListening();
+          setIsScannerOpen(false);
+          pageVoiceSessionRef.current = false;
+          autoListenAfterNavigationRef.current = true;
+          speak(lang === 'hi-IN' ? 'Wallet home par wapas ja rahi hoon.' : 'Returning to Wallet home.', { lang });
+        }}
         speak={speak}
         lang={lang}
       />
@@ -1398,148 +1564,100 @@ export const App: React.FC = () => {
             style={{
               width: '100%',
               maxWidth: '520px',
+              maxHeight: '90dvh',
+              overflowY: 'auto',
               backgroundColor: 'var(--bg)',
               color: 'var(--text)',
               borderRadius: 'var(--radius-card, 16px)',
-              padding: '2rem 1.5rem',
+              padding: '1.5rem',
               display: 'flex',
               flexDirection: 'column',
-              gap: '1.5rem',
+              gap: '1rem',
               border: '2px solid var(--border)',
             }}
           >
-            <Headline level={2}>{lang === 'hi-IN' ? 'सेटिंग्स' : 'App Settings'}</Headline>
-
-            {/* Output Mode Selection */}
-            <div>
-              <strong style={{ fontSize: 'var(--text-body-large)', display: 'block', marginBottom: '0.5rem' }}>
-                {lang === 'hi-IN' ? 'आवाज़ मोड चुनें:' : 'Speech Output Mode:'}
-              </strong>
-              <BodyText muted style={{ marginBottom: '1rem' }}>
-                {outputMode === 'voice'
-                  ? 'Voice Mode: The app speaks replies itself using its built-in speech engine.'
-                  : 'Screen Reader Mode: The app does not speak aloud; TalkBack or VoiceOver will read the text to prevent double speech.'}
-              </BodyText>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <BigButton
-                  variant={outputMode === 'voice' ? 'primary' : 'secondary'}
-                  onClick={() => setOutputMode('voice')}
-                >
-                  🎙️ Voice Mode
-                </BigButton>
-                <BigButton
-                  variant={outputMode === 'screen_reader' ? 'primary' : 'secondary'}
-                  onClick={() => setOutputMode('screen_reader')}
-                >
-                  ♿ Screen Reader
-                </BigButton>
+            <button
+              type="button"
+              onClick={() => {
+                stopListening();
+                setIsSettingsOpen(false);
+                setSettingsAwaitingChoice(false);
+                pageVoiceSessionRef.current = false;
+                autoListenAfterNavigationRef.current = true;
+                speak(lang === 'hi-IN' ? 'Wallet home par wapas ja rahi hoon.' : 'Returning to Wallet home.', { lang });
+              }}
+              aria-label={lang === 'hi-IN' ? 'Wallet home par wapas jaayein' : 'Return to Wallet home'}
+              style={{ alignSelf: 'flex-start', minHeight: 56, padding: '0.7rem 1.2rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}
+            >
+              {lang === 'hi-IN' ? '← वॉलेट होम' : '← Wallet home'}
+            </button>
+            <Headline level={2}>{settingsAwaitingChoice
+              ? (lang === 'hi-IN' ? 'कौन-सा विकल्प बदलना है?' : 'What would you like to change?')
+              : (lang === 'hi-IN' ? 'और क्या बदलना है?' : 'What would you like to change next?')}</Headline>
+            <BodyText size="large">
+              {lang === 'hi-IN'
+                ? 'Aap naturally bata sakte hain ki kya badalna hai—jaise screen ko halka karna, Hindi mein baat karna, ya dheere bolna. Agar mujhe aapki pasand samajh nahi aayi to main dobara poochungi.'
+                : 'Tell me naturally what you want changed—for example, make the screen lighter, speak Hindi, or slow down. If I need your choice, I’ll ask a follow-up.'}
+            </BodyText>
+            <BodyText muted>
+              {lang === 'hi-IN'
+                ? `Abhi ${themeMode === 'light' ? 'light' : 'dark'} theme, Hindi, ${outputMode === 'voice' ? 'voice' : 'screen reader'} output, ${speed.toFixed(1)} guna bolne ki raftaar hai. Hands-free ${isContinuousVoice ? 'chalu' : 'band'} hai.`
+                : `Current theme: ${themeMode}. Language: English. Output: ${outputMode === 'voice' ? 'spoken voice' : 'screen reader'}. Speech speed: ${speed.toFixed(1)}×. Hands-free is ${isContinuousVoice ? 'on' : 'off'}.`}
+            </BodyText>
+            <section aria-labelledby="theme-setting-title" style={{ display: 'grid', gap: '0.6rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
+              <strong id="theme-setting-title">🎨 {lang === 'hi-IN' ? 'रंग और थीम' : 'Appearance'}</strong>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
+                <button type="button" aria-pressed={themeMode === 'light'} style={settingButtonStyle(themeMode === 'light')} onClick={() => setThemeMode('light')}>☀️ {lang === 'hi-IN' ? 'लाइट' : 'Light'}</button>
+                <button type="button" aria-pressed={themeMode === 'dark'} style={settingButtonStyle(themeMode === 'dark')} onClick={() => setThemeMode('dark')}>🌙 {lang === 'hi-IN' ? 'डार्क' : 'Dark'}</button>
               </div>
-            </div>
-
-            {/* Language Selection */}
-            <div>
-              <strong style={{ fontSize: 'var(--text-body-large)', display: 'block', marginBottom: '0.5rem' }}>
-                {lang === 'hi-IN' ? 'भाषा (Language):' : 'Language:'}
-              </strong>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <BigButton
-                  variant={lang === 'hi-IN' ? 'primary' : 'secondary'}
-                  onClick={() => setLang('hi-IN')}
-                >
-                  हिंदी (Hindi)
-                </BigButton>
-                <BigButton
-                  variant={lang === 'en-IN' ? 'primary' : 'secondary'}
-                  onClick={() => setLang('en-IN')}
-                >
-                  English
-                </BigButton>
+            </section>
+            <section aria-labelledby="language-setting-title" style={{ display: 'grid', gap: '0.6rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
+              <strong id="language-setting-title">🗣️ {lang === 'hi-IN' ? 'भाषा' : 'Language'}</strong>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
+                <button type="button" aria-pressed={lang === 'en-IN'} style={settingButtonStyle(lang === 'en-IN')} onClick={() => setLang('en-IN')}>English</button>
+                <button type="button" aria-pressed={lang === 'hi-IN'} style={settingButtonStyle(lang === 'hi-IN')} onClick={() => setLang('hi-IN')}>हिन्दी</button>
               </div>
-            </div>
-
-            {/* Hands-Free Continuous Voice Toggle */}
-            <div>
-              <strong style={{ fontSize: 'var(--text-body-large)', display: 'block', marginBottom: '0.5rem' }}>
-                {lang === 'hi-IN' ? 'हैंड्स-फ्री वॉइस (ऑटो-माइक):' : 'Hands-Free Voice (Auto-Mic):'}
-              </strong>
-              <BodyText muted style={{ marginBottom: '1rem' }}>
-                {isContinuousVoice
-                  ? 'Active: The mic automatically re-opens after the assistant speaks so blind users can converse hands-free.'
-                  : 'Manual: Tap the mic each time you want to speak.'}
-              </BodyText>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <BigButton
-                  variant={isContinuousVoice ? 'primary' : 'secondary'}
-                  onClick={() => setIsContinuousVoice(true)}
-                >
-                  🟢 Hands-Free ON
-                </BigButton>
-                <BigButton
-                  variant={!isContinuousVoice ? 'primary' : 'secondary'}
-                  onClick={() => setIsContinuousVoice(false)}
-                >
-                  ⚪ Manual Tap
-                </BigButton>
+            </section>
+            <section aria-labelledby="speed-setting-title" style={{ display: 'grid', gap: '0.6rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
+              <label id="speed-setting-title" htmlFor="speech-speed" style={{ fontWeight: 700 }}>🔉 {lang === 'hi-IN' ? 'बोलने की गति' : 'Speech speed'} · {speed.toFixed(1)}×</label>
+              <input id="speech-speed" type="range" min="0.6" max="1.6" step="0.1" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} aria-valuetext={`${speed.toFixed(1)} times`} style={{ width: '100%', accentColor: 'var(--accent)' }} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
+                <button type="button" style={settingButtonStyle(false)} onClick={() => setSpeed(0.8)}>{lang === 'hi-IN' ? 'धीमी' : 'Slower'}</button>
+                <button type="button" style={settingButtonStyle(speed === 1)} onClick={() => setSpeed(1)}>{lang === 'hi-IN' ? 'सामान्य' : 'Normal'}</button>
+                <button type="button" style={settingButtonStyle(false)} onClick={() => setSpeed(1.3)}>{lang === 'hi-IN' ? 'तेज़' : 'Faster'}</button>
               </div>
-            </div>
-
-            {/* Speech Speed */}
-            <div>
-              <strong style={{ fontSize: 'var(--text-body-large)', display: 'block', marginBottom: '0.5rem' }}>
-                {lang === 'hi-IN' ? 'बोलने की गति:' : 'Speech Speed:'}
-              </strong>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={() => setSpeed(0.8)}
-                  style={{
-                    minHeight: '48px',
-                    borderRadius: 'var(--radius-pill)',
-                    backgroundColor: speed === 0.8 ? 'var(--accent)' : 'var(--surface)',
-                    color: speed === 0.8 ? 'var(--accent-text)' : 'var(--text)',
-                    border: '2px solid var(--border)',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  0.8x (Slow)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSpeed(1.0)}
-                  style={{
-                    minHeight: '48px',
-                    borderRadius: 'var(--radius-pill)',
-                    backgroundColor: speed === 1.0 ? 'var(--accent)' : 'var(--surface)',
-                    color: speed === 1.0 ? 'var(--accent-text)' : 'var(--text)',
-                    border: '2px solid var(--border)',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  1.0x (Normal)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSpeed(1.2)}
-                  style={{
-                    minHeight: '48px',
-                    borderRadius: 'var(--radius-pill)',
-                    backgroundColor: speed === 1.2 ? 'var(--accent)' : 'var(--surface)',
-                    color: speed === 1.2 ? 'var(--accent-text)' : 'var(--text)',
-                    border: '2px solid var(--border)',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  1.2x (Fast)
-                </button>
+            </section>
+            <section aria-labelledby="output-setting-title" style={{ display: 'grid', gap: '0.6rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
+              <strong id="output-setting-title">🔊 {lang === 'hi-IN' ? 'जवाब का तरीका' : 'Response mode'}</strong>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
+                <button type="button" aria-pressed={outputMode === 'voice'} style={settingButtonStyle(outputMode === 'voice')} onClick={() => setOutputMode('voice')}>🔊 {lang === 'hi-IN' ? 'आवाज़' : 'Voice'}</button>
+                <button type="button" aria-pressed={outputMode === 'screen_reader'} style={settingButtonStyle(outputMode === 'screen_reader')} onClick={() => setOutputMode('screen_reader')}>♿ {lang === 'hi-IN' ? 'स्क्रीन रीडर' : 'Screen reader'}</button>
               </div>
-            </div>
-
-            <BigButton variant="primary" onClick={() => setIsSettingsOpen(false)}>
-              {lang === 'hi-IN' ? 'सेव करें और बंद करें' : 'Save & Close'}
-            </BigButton>
+            </section>
+            <section aria-labelledby="handsfree-setting-title" style={{ display: 'grid', gap: '0.6rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
+              <strong id="handsfree-setting-title">🎙️ {lang === 'hi-IN' ? 'Hands-free और माइक्रोफ़ोन' : 'Hands-free and microphone'}</strong>
+              <BodyText muted>{micPermissionReady
+                ? (lang === 'hi-IN' ? `माइक्रोफ़ोन अनुमति मिली। अभी ${isListening ? 'सुन रहा है' : 'रुका है'}।` : `Microphone permission granted. It is ${isListening ? 'listening' : 'paused'} now.`)
+                : (lang === 'hi-IN' ? 'पहली बार माइक्रोफ़ोन चालू करने पर ब्राउज़र अनुमति माँगेगा।' : 'The browser will ask permission the first time you start the microphone.')}</BodyText>
+              <button type="button" aria-pressed={isContinuousVoice} style={settingButtonStyle(isContinuousVoice)} onClick={() => {
+                const enabled = !isContinuousVoice;
+                setIsContinuousVoice(enabled);
+                continuousVoiceRef.current = enabled;
+                if (enabled && !micPermissionReady) setMicPermissionError(lang === 'hi-IN' ? 'Permission dene ke liye microphone button dabayein.' : 'Tap the microphone button to grant permission.');
+                else if (enabled && !isListening) startListening();
+                else if (!enabled && isListening) stopListening();
+              }}>{isContinuousVoice ? '✅ ' : '⏸️ '}{lang === 'hi-IN' ? `Hands-free ${isContinuousVoice ? 'चालू' : 'बंद'}` : `Hands-free ${isContinuousVoice ? 'On' : 'Off'}`}</button>
+              <button type="button" style={settingButtonStyle(isListening)} onClick={() => { void handleMicClick(); }} disabled={!sttSupported}>
+                {isListening ? '⏹️ ' : '🎤 '}{lang === 'hi-IN' ? (isListening ? 'माइक्रोफ़ोन रोकें' : 'माइक्रोफ़ोन शुरू करें') : (isListening ? 'Stop microphone' : 'Start microphone')}
+              </button>
+              <BodyText muted>{lang === 'hi-IN' ? 'Hands-free चालू होने पर जवाब के बाद माइक्रोफ़ोन फिर सुनना शुरू करेगा। बंद करने के लिए “stop listening” बोलें।' : 'With hands-free on, the microphone listens again after each reply. Say “stop listening” to turn it off.'}</BodyText>
+            </section>
+            <StatusBanner variant="success" label={lang === 'hi-IN' ? 'बोलें या बटन चुनें' : 'Voice and touch controls'}>
+              {lang === 'hi-IN'
+                ? 'Mic se badlav boliye, ya neeche diya hua button chuniye.'
+                : 'Say the change you want, or choose one of the controls below.'}
+            </StatusBanner>
+            <button type="button" style={settingButtonStyle(false)} onClick={() => { setIsSettingsOpen(false); setSettingsAwaitingChoice(false); }}>{lang === 'hi-IN' ? 'सेटिंग्स बंद करें' : 'Close settings'}</button>
           </div>
         </div>
       )}

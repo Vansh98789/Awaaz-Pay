@@ -1,9 +1,8 @@
 export function formatFundingNotificationHindi(
   senderName: string,
   amount: number,
-  newBalance: number
+  currency = 'USD'
 ): string {
-  const formattedAmount = amount.toLocaleString('en-IN');
-  const formattedBalance = newBalance.toLocaleString('en-IN');
-  return `${senderName} ne ${formattedAmount} rupaye bheje. Aapke paas ab ${formattedBalance} rupaye hain.`;
+  const formattedAmount = amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${senderName} ne PayPal Sandbox sender account mein ${formattedAmount} ${currency} bheje.`;
 }

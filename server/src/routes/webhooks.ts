@@ -3,7 +3,6 @@ import type Database from 'better-sqlite3';
 import { verifyWebhookSignature } from '../paypal/index.js';
 import {
   addLedgerEntry,
-  getBalance,
   createNotification,
   writeAudit,
   hasLedgerRef,
@@ -46,7 +45,7 @@ export function createWebhooksRouter(db: Database.Database): Router {
         const resource = event.resource;
         const captureId = resource?.id;
         const amount = parseFloat(resource?.amount?.value || '0');
-        const currency = resource?.amount?.currency_code || 'INR';
+        const currency = resource?.amount?.currency_code || 'USD';
         const customId = resource?.custom_id;
         const userId = customId || 'user_meena';
         const senderName = resource?.payer?.name?.given_name || 'Ramesh';
@@ -64,8 +63,7 @@ export function createWebhooksRouter(db: Database.Database): Router {
           ref,
         });
 
-        const newBalance = getBalance(db, userId);
-        const spokenText = formatFundingNotificationHindi(senderName, amount, newBalance);
+        const spokenText = formatFundingNotificationHindi(senderName, amount, currency);
 
         createNotification(db, {
           user_id: userId,
@@ -77,10 +75,10 @@ export function createWebhooksRouter(db: Database.Database): Router {
         writeAudit(db, {
           user_id: userId,
           kind: 'paypal_webhook_processed',
-          payload: JSON.stringify({ eventId, captureId, amount, currency, newBalance }),
+          payload: JSON.stringify({ eventId, captureId, amount, currency }),
         });
 
-        res.status(200).json({ status: 'success', eventId, amount, balance: newBalance });
+        res.status(200).json({ status: 'success', eventId, amount, currency });
         return;
       }
 

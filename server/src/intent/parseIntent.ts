@@ -65,18 +65,21 @@ export async function parseIntent(
       schema: IntentSchema,
     });
     const details = extractPaymentDetails(transcript, contacts);
-    const explicitMoneyRequest = /\b(send|pay|transfer|bhej(?:na|o|do)?|rupaye? bhej)\b/i.test(transcript);
+    const explicitMoneyRequest = /\b(send|pay|transfer|make\s+(?:a\s+)?payment|payment|bhej(?:na|o|do)?|rupaye? bhej)\b/i.test(transcript);
     if (
       result.intent === 'send_money' ||
-      (result.intent === 'unknown' && explicitMoneyRequest &&
-        (details.amount !== null || details.recipient_alias !== null))
+      (result.intent === 'unknown' && explicitMoneyRequest)
     ) {
       return postProcess({
         ...result,
         intent: 'send_money',
         amount: result.amount ?? details.amount,
-        recipient_alias: result.recipient_alias ?? details.recipient_alias,
-        confidence: Math.max(result.confidence, details.amount !== null || details.recipient_alias !== null ? 0.8 : 0),
+        // Prefer a recipient explicitly present in the transcript (especially
+        // a scanned QR email) over a guessed alias from the model.
+        recipient_alias: details.recipient_alias ?? result.recipient_alias,
+        // A clear payment request is enough to ask for missing details; it is
+        // never enough to prepare or send a payment by itself.
+        confidence: Math.max(result.confidence, 0.8),
         clarifying_question: null,
       });
     }

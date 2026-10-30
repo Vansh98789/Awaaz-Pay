@@ -1,12 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
-import { BigButton, Headline, BodyText } from '../design/index.js';
+import { Headline, BodyText } from '../design/index.js';
 import { triggerHaptic } from '../hooks/useHaptics.js';
 
 interface QRScannerModalProps {
   isOpen: boolean;
-  onClose: () => void;
+  cameraCommand?: number;
   onScanSuccess: (qrData: string) => void;
+  onReturnHome: () => void;
+  allowEmailRecipient?: boolean;
+  emailEntryOpen?: boolean;
+  onEmailEntryOpenChange?: (open: boolean) => void;
+  onUseEmail?: (email: string) => void | Promise<void>;
   speak: (text: string, options?: { lang?: string }) => void;
   lang: 'hi-IN' | 'en-IN';
 }
@@ -22,8 +27,13 @@ type GuidanceMessage =
 
 export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   isOpen,
-  onClose,
+  cameraCommand = 0,
   onScanSuccess,
+  onReturnHome,
+  allowEmailRecipient = false,
+  emailEntryOpen = false,
+  onEmailEntryOpenChange,
+  onUseEmail,
   speak,
   lang,
 }) => {
@@ -32,10 +42,9 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
 
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [displayMessage, setDisplayMessage] = useState<string>('Point the camera at the code');
-  const [showManualInput, setShowManualInput] = useState<boolean>(false);
-  const [manualCode, setManualCode] = useState<string>('');
   const [timeoutExpired, setTimeoutExpired] = useState<boolean>(false);
-  const [cameraStarted, setCameraStarted] = useState<boolean>(false);
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [submittingEmail, setSubmittingEmail] = useState(false);
 
   const lastSpokenGuidanceRef = useRef<GuidanceMessage | null>(null);
   const lastSpokenTimeRef = useRef<number>(0);
@@ -132,7 +141,6 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
         await videoRef.current.play();
-        setCameraStarted(true);
         requestAnimationFrame(scanFrame);
       }
     } catch (err) {
@@ -149,27 +157,26 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
             : (lang === 'hi-IN' ? 'Camera nahi khul paya. Dobara koshish karein.' : 'Could not open the camera. Please try again.');
       setCameraError(msg);
       setDisplayMessage(msg);
-      const errGuidance =
-        lang === 'hi-IN'
-          ? 'Camera nahi khul paya. Kripya code manually dalein.'
-          : 'Could not access camera. Please enter code manually.';
+      const errGuidance = lang === 'hi-IN'
+        ? 'Camera nahi khul paya. Dobara koshish ke liye dobara scan bolo, ya recipient ka email mic mein boliye.'
+        : 'Could not access the camera. Say scan again, or speak the recipient’s email into the microphone.';
       speak(errGuidance, { lang });
-      setShowManualInput(true);
     }
   };
 
   useEffect(() => {
-    if (!isOpen) {
+    if (!isOpen || emailEntryOpen) {
       stopCamera();
+      if (!isOpen) setRecipientEmail('');
       return;
     }
-    setCameraStarted(false);
     setCameraError(null);
     setTimeoutExpired(false);
+    void startCamera();
     return () => {
       stopCamera();
     };
-  }, [isOpen]);
+  }, [isOpen, cameraCommand, emailEntryOpen]);
 
   const scanFrame = async () => {
     if (!scanningActiveRef.current || !videoRef.current || !canvasRef.current) {
@@ -255,14 +262,6 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
     }
   };
 
-  const handleManualSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!manualCode.trim()) return;
-    triggerHaptic('understood');
-    stopCamera();
-    onScanSuccess(manualCode.trim());
-  };
-
   if (!isOpen) return null;
 
   return (
@@ -285,15 +284,25 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
         padding: '2rem 1.25rem',
       }}
     >
-      <header style={{ width: '100%', textAlign: 'center' }}>
+      <header style={{ width: '100%', maxWidth: '520px', textAlign: 'center' }}>
+        <button
+          type="button"
+          onClick={onReturnHome}
+          aria-label={lang === 'hi-IN' ? 'Wallet home par wapas jaayein' : 'Return to Wallet home'}
+          style={{ minHeight: 56, marginBottom: '0.75rem', padding: '0.7rem 1.2rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}
+        >
+          {lang === 'hi-IN' ? '← वॉलेट होम' : '← Wallet home'}
+        </button>
         <Headline level={1}>{lang === 'hi-IN' ? 'QR Code Scan' : 'Scan a QR code'}</Headline>
         <BodyText muted style={{ marginTop: '0.5rem' }}>
-          {lang === 'hi-IN'
-            ? 'Invoice QR ya Awaaz Pay recipient QR scan karein. Recipient QR mein naam aur PayPal email hota hai.'
-            : 'Scan a PayPal invoice QR or an Awaaz Pay recipient QR. Recipient codes contain a name and PayPal email.'}
+          {allowEmailRecipient
+            ? (lang === 'hi-IN' ? 'Chunein: QR scan karein ya PayPal email se pay karein. Email bol sakte hain ya type kar sakte hain.' : 'Choose: scan a QR or pay by PayPal email. You can say or type the email.')
+            : (lang === 'hi-IN'
+              ? 'Invoice QR ya Awaaz Pay recipient QR scan karein. Recipient QR mein naam aur PayPal email hota hai.'
+              : 'Scan a PayPal invoice QR or an Awaaz Pay recipient QR. Recipient codes contain a name and PayPal email.')}
         </BodyText>
         {/* Prominent Spoken & Live Status Guidance */}
-        <div
+        {!emailEntryOpen && <div
           role="status"
           aria-live="polite"
           style={{
@@ -312,11 +321,24 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
               {cameraError}
             </div>
           )}
-        </div>
+        </div>}
       </header>
 
+      {allowEmailRecipient && !emailEntryOpen && (
+        <button
+          type="button"
+          onClick={() => {
+            onEmailEntryOpenChange?.(true);
+            speak(lang === 'hi-IN' ? 'PayPal email boliye ya neeche type karke continue dabaiye.' : 'Say the PayPal email, or type it below and press Continue.', { lang });
+          }}
+          style={{ minHeight: 56, padding: '0.7rem 1.2rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--accent)', background: 'var(--accent)', color: 'var(--accent-text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}
+        >
+          {lang === 'hi-IN' ? 'PayPal email se pay karein' : 'Pay by PayPal email'}
+        </button>
+      )}
+
       {/* Main Viewfinder with Braille Dot Frame Overlay */}
-      <main
+      {!emailEntryOpen && <main
         style={{
           position: 'relative',
           width: '100%',
@@ -345,85 +367,54 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
             pointerEvents: 'none',
           }}
         />
-      </main>
+      </main>}
 
-      {(!cameraStarted && !showManualInput) || cameraError ? (
-        <div style={{ width: '100%', maxWidth: '420px' }}>
-          <BigButton variant="primary" onClick={startCamera}>
-            {cameraError
-              ? (lang === 'hi-IN' ? 'Camera dobara koshish karein' : 'Try camera again')
-              : (lang === 'hi-IN' ? 'Camera chalu karein' : 'Enable camera and scan')}
-          </BigButton>
-        </div>
-      ) : null}
-
-      {timeoutExpired && (
-        <div style={{ width: '100%', maxWidth: '420px' }}>
-          <BigButton
-            variant="primary"
-            onClick={() => {
-              stopCamera();
-              startCamera();
-            }}
-          >
-            {lang === 'hi-IN' ? 'Dobara koshish karein' : 'Try Again'}
-          </BigButton>
-        </div>
-      )}
-
-      {/* Helper manual code input option */}
-      {showManualInput ? (
+      {allowEmailRecipient && emailEntryOpen && (
         <form
-          onSubmit={handleManualSubmit}
-          style={{ width: '100%', maxWidth: '420px', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}
-        >
-          <label htmlFor="manual-qr-input" style={{ fontSize: 'var(--text-body)', fontWeight: 700 }}>
-            {lang === 'hi-IN' ? 'Invoice code ya link yahan dalein:' : 'Enter invoice code or link:'}
-          </label>
-          <input
-            id="manual-qr-input"
-            type="text"
-            value={manualCode}
-            onChange={(e) => setManualCode(e.target.value)}
-            placeholder="INV2-DEMO-RAVI-250"
-            style={{
-              minHeight: 'var(--min-target, 64px)',
-              padding: '0.75rem 1rem',
-              fontSize: 'var(--text-body, 1.25rem)',
-              borderRadius: 'var(--radius-card, 16px)',
-              border: '2px solid var(--border)',
-              backgroundColor: 'var(--surface)',
-              color: 'var(--text)',
-            }}
-          />
-          <BigButton type="submit" variant="primary">
-            {lang === 'hi-IN' ? 'Code Submit Karein' : 'Submit Code'}
-          </BigButton>
-        </form>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setShowManualInput(true)}
-          style={{
-            minHeight: 'var(--min-target, 64px)',
-            background: 'none',
-            border: 'none',
-            color: 'var(--accent)',
-            fontSize: 'var(--text-body, 1.25rem)',
-            fontWeight: 700,
-            textDecoration: 'underline',
-            cursor: 'pointer',
+          onSubmit={(event) => {
+            event.preventDefault();
+            const value = recipientEmail.trim();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) || submittingEmail) return;
+            setSubmittingEmail(true);
+            Promise.resolve(onUseEmail?.(value)).finally(() => setSubmittingEmail(false));
           }}
+          style={{ width: '100%', maxWidth: '420px', display: 'flex', flexDirection: 'column', gap: '0.85rem', padding: '1.25rem', borderRadius: 'var(--radius-card, 16px)', border: '2px solid var(--border)', background: 'var(--surface)' }}
         >
-          {lang === 'hi-IN' ? 'Enter code manually (Helper ke liye)' : 'Enter code manually'}
-        </button>
+          <BodyText size="large" style={{ fontWeight: 750 }}>{lang === 'hi-IN' ? 'PayPal Sandbox email' : 'PayPal Sandbox email'}</BodyText>
+          <label htmlFor="scanner-recipient-email" style={{ fontWeight: 650 }}>{lang === 'hi-IN' ? 'Email boliye ya type karein' : 'Say or type the recipient’s email'}</label>
+          <input
+            id="scanner-recipient-email"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            autoCapitalize="none"
+            spellCheck={false}
+            required
+            disabled={submittingEmail}
+            value={recipientEmail}
+            onChange={(event) => setRecipientEmail(event.target.value)}
+            placeholder="name@example.com"
+            style={{ minHeight: 56, width: '100%', boxSizing: 'border-box', padding: '0.75rem', borderRadius: 'var(--radius-card, 12px)', border: '2px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', font: 'inherit' }}
+          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <button type="submit" disabled={submittingEmail} style={{ minHeight: 56, flex: '1 1 170px', padding: '0.7rem 1rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--accent)', background: 'var(--accent)', color: 'var(--accent-text)', font: 'inherit', fontWeight: 750, cursor: submittingEmail ? 'wait' : 'pointer', opacity: submittingEmail ? 0.7 : 1 }}>
+              {submittingEmail ? (lang === 'hi-IN' ? 'Taiyaar ho raha hai…' : 'Preparing…') : (lang === 'hi-IN' ? 'Email se continue karein' : 'Continue with email')}
+            </button>
+            <button type="button" onClick={() => onEmailEntryOpenChange?.(false)} style={{ minHeight: 56, flex: '1 1 140px', padding: '0.7rem 1rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}>
+              {lang === 'hi-IN' ? 'QR par wapas' : 'Back to QR scan'}
+            </button>
+          </div>
+        </form>
       )}
 
-      {/* Large 64px Cancel Button */}
-      <footer style={{ width: '100%', maxWidth: '420px' }}>
-        <BigButton variant="secondary" onClick={onClose}>
-          {lang === 'hi-IN' ? 'Cancel karein' : 'Cancel'}
-        </BigButton>
+      <footer style={{ width: '100%', maxWidth: '420px', textAlign: 'center' }}>
+        <BodyText muted>
+          {emailEntryOpen
+            ? (lang === 'hi-IN' ? 'Email bolkar ya type karke continue karein, ya QR scan par wapas jaayein.' : 'Say or type the email and continue, or return to QR scanning.')
+            : timeoutExpired || cameraError
+            ? lang === 'hi-IN' ? 'Dobara scan ke liye “dobara scan karo” bolein. Band karne ke liye “scanner band karo” bolein.' : 'Say “scan again” to retry, or “close scanner” to exit.'
+          : lang === 'hi-IN' ? 'Scanner band karne ke liye “scanner band karo” bolein, ya Wallet home button dabayein.' : 'Say “close scanner” or use the Wallet home button to exit.'}
+        </BodyText>
       </footer>
     </div>
   );

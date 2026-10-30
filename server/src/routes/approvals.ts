@@ -10,9 +10,12 @@ import {
   writeAudit,
   createNotification,
 } from '../db/repository.js';
+import { confirmPayment } from '../payments/pipeline.js';
+import { requireFamilyAuth } from '../auth/familyAuth.js';
 
 export function createApprovalsRouter(db: Database.Database): Router {
   const router = Router();
+  router.use(requireFamilyAuth);
 
   // 1. Get approval details by token
   router.get('/:token', (req: Request, res: Response) => {
@@ -34,7 +37,6 @@ export function createApprovalsRouter(db: Database.Database): Router {
         res.status(404).json({ error: 'Associated transaction not found' });
         return;
       }
-
       const user = getUserById(db, tx.user_id);
       const isExpired =
         !!approval.expires_at && new Date() > new Date(approval.expires_at);
@@ -60,6 +62,8 @@ export function createApprovalsRouter(db: Database.Database): Router {
         transactionId: tx.id,
         amount: tx.amount,
         currency: tx.currency,
+        transactionStatus: tx.status,
+        paypalBatchId: tx.paypal_ref,
         payee: payeeName,
         userName: user?.name || 'Meena',
         createdAt: approval.created_at,
@@ -73,7 +77,7 @@ export function createApprovalsRouter(db: Database.Database): Router {
   });
 
   // 2. Decide approval (Approve or Deny)
-  router.post('/:token/decide', (req: Request, res: Response) => {
+  router.post('/:token/decide', async (req: Request, res: Response) => {
     try {
       const token = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token;
       if (!token) {
@@ -101,14 +105,19 @@ export function createApprovalsRouter(db: Database.Database): Router {
         return;
       }
 
-      if (approval.expires_at && new Date() > new Date(approval.expires_at)) {
-        res.status(400).json({ error: 'Approval request has expired' });
-        return;
-      }
-
       const tx = getTransactionById(db, approval.transaction_id);
       if (!tx) {
         res.status(404).json({ error: 'Transaction not found' });
+        return;
+      }
+      if (approval.expires_at && new Date() > new Date(approval.expires_at)) {
+        updateApprovalStatus(db, token, 'expired');
+        updateTransactionStatus(db, tx.id, 'failed');
+        res.status(400).json({ error: 'Approval request expired. No PayPal payout was sent.' });
+        return;
+      }
+      if (tx.status !== 'awaiting_approval') {
+        res.status(409).json({ error: 'This payment is not waiting for guardian approval.' });
         return;
       }
 
@@ -144,14 +153,25 @@ export function createApprovalsRouter(db: Database.Database): Router {
         createNotification(db, {
           user_id: tx.user_id,
           kind: 'approval_granted',
-          message: `${guardianName} approved payment of ₹${tx.amount} to ${payeeName}.`,
-          spoken_text: `${guardianName} ji ne ${payeeName} ko ${tx.amount} rupaye bhejne ki manzoori de di hai. Payment bhejane ke liye haan bolein.`,
+          message: `${guardianName} approved payment of $${tx.amount.toFixed(2)} to ${payeeName}.`,
+          spoken_text: `${guardianName} ji ne ${payeeName} ko ${tx.amount.toFixed(2)} US dollars bhejne ki manzoori de di hai. PayPal Sandbox payment bheji ja rahi hai.`,
         });
+
+        // Guardian approval is the final gate. Dispatch the exact transaction the user already confirmed.
+        const payment = await confirmPayment(db, { transactionId: tx.id, userConfirmed: true });
 
         res.status(200).json({
           success: true,
           status: 'approved',
           transactionId: tx.id,
+          paymentStatus: payment.status,
+          paypalStatus: payment.paypalStatus,
+          batchId: payment.batchId,
+          message: payment.status === 'completed'
+            ? 'PayPal Sandbox confirmed the payment.'
+            : payment.status === 'processing'
+              ? 'PayPal Sandbox is processing the approved payment.'
+              : payment.message || payment.error || 'The payment could not be sent.',
         });
       } else {
         updateApprovalStatus(db, token, 'denied');
@@ -172,8 +192,8 @@ export function createApprovalsRouter(db: Database.Database): Router {
         createNotification(db, {
           user_id: tx.user_id,
           kind: 'approval_denied',
-          message: `${guardianName} denied payment of ₹${tx.amount} to ${payeeName}.`,
-          spoken_text: `${guardianName} ji ne yeh payment reject kar diya hai. Payment cancel ho gaya hai.`,
+          message: `${guardianName} denied payment of $${tx.amount.toFixed(2)} to ${payeeName}.`,
+          spoken_text: `${guardianName} ji ne yeh payment reject kar diya hai. PayPal payout nahi bheja gaya.`,
         });
 
         res.status(200).json({
