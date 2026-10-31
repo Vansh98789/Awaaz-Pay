@@ -1089,11 +1089,12 @@ export const App: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ qrData }),
       });
+      const scanData = await res.json().catch(() => ({}));
 
       if (res.ok) {
         setAwaitingPaymentRecipient(false);
         setPendingScanPaymentRequest(null);
-        const inv = await res.json();
+        const inv = scanData;
         setPendingConfirmation({
           isOpen: true,
           payeeName: inv.merchantName,
@@ -1107,9 +1108,10 @@ export const App: React.FC = () => {
             : (lang === 'hi-IN' ? `${inv.merchantName}, ek verified merchant.` : `To ${inv.merchantName}, a verified merchant.`),
         });
       } else {
+        const detail = typeof scanData.error === 'string' ? scanData.error : '';
         const message = lang === 'hi-IN'
-          ? 'Yeh QR code supported PayPal invoice ya recipient code nahi hai. Payee ka Awaaz Pay QR scan karein.'
-          : 'This QR code is not a supported PayPal invoice or recipient code. Ask the payee for an Awaaz Pay recipient QR.';
+          ? `QR code ko payment ke liye verify nahi kar sake. Naya Awaaz Pay QR banwa kar scan karein.${detail ? ` ${detail}` : ''}`
+          : `Could not verify this QR for payment. Ask the merchant to create a new Awaaz Pay QR and scan it again.${detail ? ` ${detail}` : ''}`;
         setScanError(message);
         speak(message, { lang });
       }
@@ -1358,10 +1360,10 @@ export const App: React.FC = () => {
 
           <BodyText muted style={{ textAlign: 'center' }}>
             {lang === 'hi-IN'
-              ? 'Scanner kholo, hisaab sunao, PayPal balance batao, family portal kholo, settings kholo, ya “dobara bolo” kahein.'
-              : 'Say “open scanner”, “read my history”, “check PayPal balance”, “open family portal”, “open settings”, or “repeat what you said”.'}
+              ? 'Scanner kholo, merchant portal kholo, hisaab sunao, PayPal balance batao, family portal kholo, settings kholo, ya “dobara bolo” kahein.'
+              : 'Say “open scanner”, “open merchant portal”, “read my history”, “check PayPal balance”, “open family portal”, “open settings”, or “repeat what you said”.'}
           </BodyText>
-          <nav aria-label={lang === 'hi-IN' ? 'App pages' : 'App shortcuts'} style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
+          <nav aria-label={lang === 'hi-IN' ? 'App pages' : 'App shortcuts'} style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '1rem', width: '100%', marginTop: '0.5rem' }}>
             <button
               type="button"
               onClick={() => { setScanError(null); setIsScannerOpen(true); }}
@@ -1385,6 +1387,14 @@ export const App: React.FC = () => {
               style={{ minHeight: 'var(--min-target, 64px)', borderRadius: 'var(--radius-pill)', border: '2px solid var(--border)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: 700, fontSize: '1rem', cursor: 'pointer' }}
             >
               🛡️ {lang === 'hi-IN' ? 'परिवार' : 'Family'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentRoute({ path: 'merchant' })}
+              aria-label={lang === 'hi-IN' ? 'दुकानदार पोर्टल खोलें' : 'Open merchant portal'}
+              style={{ minHeight: 'var(--min-target, 64px)', borderRadius: 'var(--radius-pill)', border: '2px solid var(--border)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: 700, fontSize: '1rem', cursor: 'pointer' }}
+            >
+              🏪 {lang === 'hi-IN' ? 'दुकानदार' : 'Merchant'}
             </button>
           </nav>
         </div>

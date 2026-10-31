@@ -5,7 +5,6 @@ import crypto from 'node:crypto';
 import {
   createInvoice,
   sendInvoice,
-  generateInvoiceQrCode,
   recordInvoicePayment,
 } from '../paypal/invoices.js';
 import {
@@ -14,6 +13,7 @@ import {
   getInvoiceById,
   updateInvoiceStatus,
   getMerchantById,
+  upsertMerchant,
   writeAudit,
   getUserById,
 } from '../db/repository.js';
@@ -61,17 +61,47 @@ export function createMerchantRouter(db: Database.Database): Router {
     }
   });
 
-  // 1. Create invoice for demo merchant (e.g. Ravi Cabs)
+  // 1. Create an invoice for a saved merchant or register a merchant from the portal form.
   router.post('/invoice', async (req: Request, res: Response) => {
     try {
-      const {
-        merchantId = 'merchant_ravi_cabs',
-        amount = 250,
-        currency = 'USD',
-        note = 'Ride with Ravi Cabs',
-      } = req.body;
+      const merchantId = typeof req.body.merchantId === 'string' ? req.body.merchantId.trim() : '';
+      const merchantName = typeof req.body.merchantName === 'string' ? req.body.merchantName.trim() : '';
+      const requestedEmail = typeof req.body.merchantEmail === 'string' ? req.body.merchantEmail.trim() : '';
+      const amount = Number(req.body.amount);
+      const currency = typeof req.body.currency === 'string' ? req.body.currency : 'USD';
+      const note = typeof req.body.note === 'string' ? req.body.note.trim() : '';
 
-      const merchant = getMerchantById(db, merchantId);
+      if (!Number.isFinite(amount) || amount < 0.01 || amount > 100000 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-7) {
+        res.status(400).json({ error: 'Enter an amount from $0.01 to $100,000 with up to two decimal places' });
+        return;
+      }
+      if (note.length > 200) {
+        res.status(400).json({ error: 'Payment note must be 200 characters or fewer' });
+        return;
+      }
+      if (currency !== 'USD') {
+        res.status(400).json({ error: 'Only USD payments are currently supported' });
+        return;
+      }
+
+      let merchant = merchantId ? getMerchantById(db, merchantId) : null;
+      if (!merchantId) {
+        if (!merchantName || merchantName.length > 80 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestedEmail) || requestedEmail.length > 254) {
+          res.status(400).json({ error: 'Enter a business name and valid PayPal Sandbox email' });
+          return;
+        }
+
+        const existing = db.prepare<[string], { id: string }>(
+          'SELECT id FROM merchants WHERE paypal_email = ? LIMIT 1'
+        ).get(requestedEmail);
+        merchant = upsertMerchant(db, {
+          id: existing?.id || `merchant_${crypto.randomUUID()}`,
+          name: merchantName,
+          paypal_email: requestedEmail,
+          verified: 0,
+        });
+      }
+
       if (!merchant) {
         res.status(404).json({ error: `Merchant ${merchantId} not found` });
         return;
@@ -91,8 +121,6 @@ export function createMerchantRouter(db: Database.Database): Router {
       let paypalInvoiceId = `AWZ-INV-${crypto.randomUUID()}`;
       let paypalInvoiceCreated = false;
       let paypalInvoiceSent = false;
-      let qrCodeBase64: string | null = null;
-      let qrCodeDataUrl: string = '';
 
       // Attempt live PayPal sandbox call
       try {
@@ -110,7 +138,6 @@ export function createMerchantRouter(db: Database.Database): Router {
           try {
             await sendInvoice(paypalInvoiceId, false);
             paypalInvoiceSent = true;
-            qrCodeBase64 = await generateInvoiceQrCode(paypalInvoiceId, 320).catch(() => null);
           } catch (sendError) {
             console.warn(`[merchant] PayPal invoice send failed: ${(sendError as Error).message}`);
           }
@@ -120,22 +147,18 @@ export function createMerchantRouter(db: Database.Database): Router {
         console.warn(`[merchant] Using wallet QR because PayPal invoice creation failed: ${(err as Error).message}`);
       }
 
-      const invoiceUrl = paypalInvoiceSent && qrCodeBase64
+      const invoiceUrl = paypalInvoiceSent
         ? `https://www.sandbox.paypal.com/invoice/p/#${paypalInvoiceId}`
         : null;
 
-      // If PayPal QR code is unavailable, generate a valid scannable QR data URL locally
-      if (qrCodeBase64) {
-        qrCodeDataUrl = `data:image/png;base64,${qrCodeBase64}`;
-      } else {
-        // Local registry QR payload is scanned by Awaaz Pay and settled by Payouts.
-        const qrPayload = JSON.stringify({ type: 'awaaz_pay_invoice', invoiceId: paypalInvoiceId });
-        qrCodeDataUrl = await QRCode.toDataURL(qrPayload, {
-          width: 320,
-          margin: 2,
-          color: { dark: '#000000', light: '#ffffff' },
-        });
-      }
+      // Awaaz's scanner resolves this ID through the local invoice registry and pays
+      // through the wallet's guarded PayPal Sandbox payout flow.
+      const qrPayload = JSON.stringify({ type: 'awaaz_pay_invoice', invoiceId: paypalInvoiceId });
+      const qrCodeDataUrl = await QRCode.toDataURL(qrPayload, {
+        width: 320,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
 
       // Save invoice in our local DB registry
       const invoice = createInvoiceRecord(db, {
@@ -174,7 +197,7 @@ export function createMerchantRouter(db: Database.Database): Router {
         amount: Number(amount),
         currency,
         status: invoice.status,
-        paymentMode: invoiceUrl ? 'paypal_invoice' : 'awaaz_pay_payout',
+        paymentMode: 'awaaz_pay_payout',
         paypalInvoiceCreated,
         qrCodeUrl: invoiceUrl,
         qrCodeImage: qrCodeDataUrl,
@@ -207,7 +230,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       res.status(200).json({
         success: true,
         invoiceId: invoice.paypal_invoice_id,
-        paymentMode: invoice.paypal_invoice_id.startsWith('AWZ-INV-') ? 'awaaz_pay_payout' : 'paypal_invoice',
+        paymentMode: 'awaaz_pay_payout',
         localId: invoice.id,
         merchantId: invoice.merchant_id,
         merchantName: invoice.merchant_name,
@@ -257,7 +280,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       res.status(200).json({
         success: true,
         invoiceId: invoice.paypal_invoice_id,
-        paymentMode: invoice.paypal_invoice_id.startsWith('AWZ-INV-') ? 'awaaz_pay_payout' : 'paypal_invoice',
+        paymentMode: 'awaaz_pay_payout',
         localId: invoice.id,
         merchantId: invoice.merchant_id,
         merchantName: invoice.merchant_name,

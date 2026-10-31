@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface InvoiceData {
   invoiceId: string;
   localId: string;
+  merchantId: string;
   merchantName: string;
   merchantEmail: string;
   settlementEmail: string;
@@ -16,66 +17,73 @@ interface InvoiceData {
   paypalInvoiceCreated: boolean;
 }
 
+const fieldStyle: React.CSSProperties = {
+  minHeight: 'var(--min-target, 64px)',
+  width: '100%',
+  padding: '0.75rem 1rem',
+  border: '2px solid var(--border)',
+  borderRadius: 'var(--radius-card, 16px)',
+  background: 'var(--surface)',
+  color: 'var(--text)',
+  font: 'inherit',
+};
+
+const labelStyle: React.CSSProperties = {
+  display: 'block',
+  marginBottom: '0.5rem',
+  fontSize: '1.25rem',
+  fontWeight: 700,
+};
+
 export const MerchantDemoPage: React.FC = () => {
-  const [amount, setAmount] = useState<number>(250);
-  const [note, setNote] = useState<string>('Cab ride to Connaught Place');
-  const [loading, setLoading] = useState<boolean>(false);
+  const [merchantName, setMerchantName] = useState('');
+  const [merchantEmail, setMerchantEmail] = useState('');
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const [loading, setLoading] = useState(false);
   const [invoice, setInvoice] = useState<InvoiceData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [recipientQr, setRecipientQr] = useState<{ name: string; paypalEmail: string; qrCodeImage: string } | null>(null);
-  const [recipientQrLoading, setRecipientQrLoading] = useState(false);
-  const [recipientName, setRecipientName] = useState('Ravi Cabs');
-  const [recipientEmail, setRecipientEmail] = useState('');
 
-  const presets = [150, 250, 500, 750];
-
-  // Auto-generate initial invoice on mount
-  useEffect(() => {
-    handleGenerateInvoice(250);
-  }, []);
-
-  // Poll status of generated invoice to show live PAID badge
   useEffect(() => {
     if (!invoice || invoice.status === 'PAID') return;
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/invoices/${invoice.invoiceId}`);
+        const res = await fetch(`/api/invoices/${encodeURIComponent(invoice.invoiceId)}`);
         if (!res.ok) return;
         const data = await res.json();
-        if (data.status === 'PAID' && invoice.status !== 'PAID') {
+        if (data.status === 'PAID') {
           setInvoice((prev) => (prev ? { ...prev, status: 'PAID' } : null));
         }
       } catch {
-        // Ignored in poll
+        // Keep showing the current invoice if status polling is temporarily unavailable.
       }
-    }, 2500);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [invoice]);
 
-  const handleGenerateInvoice = async (invoiceAmount: number) => {
+  const handleGenerateInvoice = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     try {
       setLoading(true);
       setError(null);
+      setInvoice(null);
 
       const res = await fetch('/api/merchant/invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          merchantId: 'merchant_ravi_cabs',
-          amount: Number(invoiceAmount),
+          merchantName: merchantName.trim(),
+          merchantEmail: merchantEmail.trim(),
+          amount: Number(amount),
           currency: 'USD',
-          note,
+          note: note.trim(),
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to create invoice');
-      }
-
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not create payment QR');
       setInvoice(data);
     } catch (err) {
       setError((err as Error).message);
@@ -84,208 +92,148 @@ export const MerchantDemoPage: React.FC = () => {
     }
   };
 
-  const handleGenerateRecipientQr = async () => {
-    try {
-      setRecipientQrLoading(true);
-      setError(null);
-      const res = await fetch('/api/merchant/recipient-qr', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          merchantId: 'merchant_ravi_cabs',
-          name: recipientName,
-          paypalEmail: recipientEmail,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Could not create recipient QR');
-      setRecipientQr(data);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setRecipientQrLoading(false);
-    }
-  };
-
   return (
-    <div className="guardian-page-container">
-      <header className="guardian-header">
-        <h1>🚖 Ravi Cabs · Merchant Portal</h1>
-        <p className="guardian-subtitle">Create a fixed fare QR for an in-person ride</p>
+    <main
+      id="main-content"
+      style={{
+        width: 'min(100% - 2rem, 560px)',
+        margin: '0 auto',
+        padding: '2rem 0',
+        color: 'var(--text)',
+      }}
+    >
+      <header style={{ marginBottom: '2rem' }}>
+        <h1 style={{ fontSize: 'clamp(2rem, 8vw, 2.75rem)', lineHeight: 1.2 }}>Merchant payment QR</h1>
+        <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '1.25rem' }}>
+          Enter your business and payment details to make a QR code your customer can scan.
+        </p>
       </header>
 
-      <div className="guardian-card request-card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div className="request-badge" style={{ backgroundColor: 'rgba(56, 189, 248, 0.15)', borderColor: '#38bdf8', color: '#38bdf8' }}>
-            ✓ Verified Merchant
-          </div>
-          {invoice && (
-            <div
-              className="request-badge"
-              style={{
-                backgroundColor: invoice.status === 'PAID' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                borderColor: invoice.status === 'PAID' ? '#22c55e' : '#f59e0b',
-                color: invoice.status === 'PAID' ? '#86efac' : '#fbbf24',
-              }}
-            >
-              {invoice.status === 'PAID' ? '✅ PAID' : '⏳ AWAITING SCAN & PAYMENT'}
-            </div>
-          )}
+      <form onSubmit={handleGenerateInvoice} style={{ display: 'grid', gap: '1.5rem' }}>
+        <div>
+          <label htmlFor="merchant-name" style={labelStyle}>Business or merchant name</label>
+          <input
+            id="merchant-name"
+            name="merchantName"
+            autoComplete="organization"
+            required
+            maxLength={80}
+            value={merchantName}
+            onChange={(event) => setMerchantName(event.target.value)}
+            style={fieldStyle}
+            placeholder="Example: Ravi Cabs"
+          />
         </div>
 
-        {/* Preset Amount Selector */}
-        <section className="form-section" style={{ border: 'none', padding: 0 }}>
-          <label style={{ marginBottom: '0.5rem' }}>Select Fare Amount (USD):</label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
-            {presets.map((p) => (
-              <button
-                key={p}
-                type="button"
-                className="action-pill-btn"
-                style={{
-                  backgroundColor: amount === p ? 'var(--accent-cyan)' : 'var(--bg-surface)',
-                  color: amount === p ? '#000000' : 'var(--text-primary)',
-                  fontWeight: 700,
-                  padding: '0.65rem 0.5rem',
-                  borderRadius: '0.5rem',
-                  border: '1px solid var(--border-subtle)',
-                  cursor: 'pointer',
-                }}
-                onClick={() => {
-                  setAmount(p);
-                  handleGenerateInvoice(p);
-                }}
-              >
-                ${p.toFixed(2)}
-              </button>
-            ))}
-          </div>
+        <div>
+          <label htmlFor="merchant-email" style={labelStyle}>PayPal Sandbox email</label>
+          <input
+            id="merchant-email"
+            name="merchantEmail"
+            type="email"
+            autoComplete="email"
+            required
+            maxLength={254}
+            value={merchantEmail}
+            onChange={(event) => setMerchantEmail(event.target.value)}
+            style={fieldStyle}
+            placeholder="merchant@example.com"
+          />
+          <p style={{ marginTop: '0.5rem', color: 'var(--text-muted)' }}>
+            Payments use PayPal Sandbox while this app is in test mode.
+          </p>
+        </div>
 
-          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-            <input
-              type="number"
-              value={amount}
-              onChange={(e) => setAmount(Number(e.target.value))}
-              className="form-input"
-              style={{ width: '130px' }}
-              placeholder="Fare amount"
-            />
-            <input
-              type="text"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              className="form-input"
-              style={{ flex: 1 }}
-              placeholder="Trip description"
-            />
-            <button
-              type="button"
-              className="auth-secondary-btn"
-              onClick={() => handleGenerateInvoice(amount)}
-              disabled={loading || amount <= 0}
-            >
-              {loading ? 'Creating...' : 'Update QR'}
-            </button>
-          </div>
-        </section>
+        <div>
+          <label htmlFor="payment-amount" style={labelStyle}>Amount (USD)</label>
+          <input
+            id="payment-amount"
+            name="amount"
+            type="number"
+            inputMode="decimal"
+            min="0.01"
+            max="100000"
+            step="0.01"
+            required
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+            style={fieldStyle}
+            placeholder="0.00"
+          />
+        </div>
 
-        <section className="form-section" aria-labelledby="recipient-qr-heading">
-          <h2 id="recipient-qr-heading">New recipient QR · no amount</h2>
-          <p>Share this code to let Awaaz Pay read the recipient name and PayPal email. The name is not verified by PayPal; scanned recipients go through the safety hold.</p>
-          <label htmlFor="recipient-qr-name">Recipient name</label>
-          <input id="recipient-qr-name" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} className="form-input" />
-          <label htmlFor="recipient-qr-email">Recipient PayPal Sandbox email</label>
-          <input id="recipient-qr-email" type="email" value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} className="form-input" placeholder="Blank uses the demo recipient account" />
-          <button
-            type="button"
-            className="auth-secondary-btn"
-            onClick={handleGenerateRecipientQr}
-            disabled={recipientQrLoading}
-            style={{ minHeight: '64px' }}
-          >
-            {recipientQrLoading ? 'Creating recipient QR…' : 'Create recipient QR'}
-          </button>
-          {recipientQr && (
-            <div style={{ display: 'grid', justifyItems: 'center', gap: '0.5rem', padding: '1rem', marginTop: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
-              <img src={recipientQr.qrCodeImage} alt={`Awaaz Pay recipient QR for ${recipientQr.name}; it contains an unverified name and PayPal email`} style={{ width: '240px', height: '240px', background: '#fff' }} />
-              <strong>{recipientQr.name}</strong>
-              <span>{recipientQr.paypalEmail}</span>
-              <span>Recipient details only. No payment amount is encoded.</span>
-            </div>
-          )}
-        </section>
+        <div>
+          <label htmlFor="payment-note" style={labelStyle}>What is this payment for? (optional)</label>
+          <input
+            id="payment-note"
+            name="note"
+            maxLength={200}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            style={fieldStyle}
+            placeholder="For example, cab ride or groceries"
+          />
+        </div>
 
-        {error && <p className="error-banner">⚠️ {error}</p>}
+        <button
+          type="submit"
+          disabled={loading}
+          aria-busy={loading}
+          style={{
+            minHeight: 'var(--min-target, 64px)',
+            width: '100%',
+            padding: '0.75rem 1rem',
+            border: 0,
+            borderRadius: 'var(--radius-pill, 9999px)',
+            background: 'var(--accent)',
+            color: 'var(--accent-text, #fff)',
+            font: 'inherit',
+            fontWeight: 700,
+            cursor: loading ? 'wait' : 'pointer',
+          }}
+        >
+          {loading ? 'Creating payment QR…' : 'Create payment QR'}
+        </button>
+      </form>
 
-        {/* QR Code Display Container */}
-        {invoice && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              backgroundColor: '#ffffff',
-              padding: '1.5rem',
-              borderRadius: '1.25rem',
-              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6)',
-              margin: '0.75rem 0',
-            }}
-          >
+      {error && (
+        <p role="alert" style={{ marginTop: '1.5rem', padding: '1rem', border: '2px solid var(--danger)', borderRadius: 'var(--radius-card, 16px)', color: 'var(--danger)' }}>
+          Error: {error}
+        </p>
+      )}
+
+      {invoice && (
+        <section aria-labelledby="payment-qr-heading" aria-live="polite" style={{ marginTop: '2rem', paddingTop: '2rem', borderTop: '2px solid var(--border)' }}>
+          <h2 id="payment-qr-heading" style={{ fontSize: '1.5rem' }}>Payment QR is ready</h2>
+          <p role="status" style={{ marginTop: '0.5rem', fontSize: '1.25rem' }}>
+            {invoice.status === 'PAID' ? 'Payment received.' : 'Waiting for your customer to scan and pay.'}
+          </p>
+          <div style={{ display: 'grid', justifyItems: 'center', gap: '1rem', marginTop: '1.5rem', padding: '1rem', background: '#fff', borderRadius: 'var(--radius-card, 16px)' }}>
             <img
               src={invoice.qrCodeImage}
-              alt={`QR Code for ${invoice.merchantName} fare of $${invoice.amount}`}
-              style={{
-                width: '260px',
-                height: '260px',
-                objectFit: 'contain',
-                display: 'block',
-              }}
+              alt={`Payment QR for ${invoice.merchantName}, ${invoice.amount.toFixed(2)} US dollars`}
+              style={{ display: 'block', width: 'min(100%, 280px)', height: 'auto', aspectRatio: '1', objectFit: 'contain' }}
             />
-            <div style={{ marginTop: '1rem', textAlign: 'center', color: '#0f172a' }}>
-              <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>
-                ${invoice.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </div>
-              <div style={{ fontSize: '0.9rem', color: '#475569', fontWeight: 600 }}>
-                {invoice.merchantName} · {invoice.paymentMode === 'paypal_invoice' ? 'PayPal invoice QR' : 'Awaaz Pay wallet QR'}
-              </div>
-              <div style={{ fontSize: '0.75rem', color: '#64748b', fontFamily: 'monospace', marginTop: '0.25rem' }}>
-                {invoice.invoiceId}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="request-details">
-          <div className="detail-row">
-            <span className="detail-label">Merchant:</span>
-            <span className="detail-value">Ravi Cabs</span>
-          </div>
-          <div className="detail-row">
-            <span className="detail-label">Merchant PayPal account:</span>
-            <span className="detail-value" style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
-              {invoice?.merchantEmail || '—'}
+            <strong style={{ color: '#111', fontSize: '1.5rem', textAlign: 'center' }}>
+              ${invoice.amount.toFixed(2)} · {invoice.merchantName}
+            </strong>
+            <span style={{ color: '#333', textAlign: 'center' }}>
+              {invoice.paymentMode === 'paypal_invoice' ? 'PayPal invoice' : 'Awaaz Pay payment'} · {invoice.invoiceId}
             </span>
           </div>
-          {invoice && invoice.paymentMode === 'awaaz_pay_payout' && (
-            <div className="detail-row">
-              <span className="detail-label">Settlement:</span>
-              <span className="detail-value">
-                Awaaz Pay sends a PayPal sandbox payout to {invoice.settlementEmail} after the customer confirms in the wallet.
-              </span>
-            </div>
+          {invoice.paymentMode === 'awaaz_pay_payout' && (
+            <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>
+              After the customer confirms the payment, the app sends the payout to {invoice.settlementEmail}.
+            </p>
           )}
-          <div className="detail-row">
-            <span className="detail-label">Trust Tier:</span>
-            <span className="detail-value">Tier 2 (Verified Merchant QR Spot Payment)</span>
-          </div>
-        </div>
+        </section>
+      )}
 
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '0.5rem' }}>
-          <a href="/" className="back-link">
-            ← Return to Awaaz Pay Wallet
-          </a>
-        </div>
-      </div>
-    </div>
+      <p style={{ marginTop: '2rem' }}>
+        <a href="/" style={{ minHeight: '64px', display: 'inline-flex', alignItems: 'center', color: 'var(--accent)', fontSize: '1.25rem' }}>
+          ← Return to Awaaz Pay
+        </a>
+      </p>
+    </main>
   );
 };
