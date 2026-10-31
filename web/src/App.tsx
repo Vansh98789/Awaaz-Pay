@@ -205,17 +205,7 @@ export const App: React.FC = () => {
       onEnd: handleSpeechEnd,
     });
 
-  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([
-    {
-      id: 'welcome',
-      sender: 'assistant',
-      text:
-        lang === 'hi-IN'
-          ? 'नमस्ते। बोलिए, मैं सुन रही हूँ।'
-          : 'Tap the microphone once, then talk naturally. Say “help” for voice commands.',
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    },
-  ]);
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
 
   // Route popstate listener
   useEffect(() => {
@@ -1360,19 +1350,18 @@ export const App: React.FC = () => {
             {statusOneLine}
           </div>
 
-          <section
-            aria-labelledby="voice-command-heading"
-            style={{ width: '100%', padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', background: 'var(--surface)', textAlign: 'left' }}
+          <details
+            style={{ width: '100%', padding: '0.25rem 1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', background: 'var(--surface)', textAlign: 'left' }}
           >
-            <h2 id="voice-command-heading" style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text)' }}>
-              {lang === 'hi-IN' ? 'बोलकर आज़माएँ' : 'Try a voice command'}
-            </h2>
-            <p style={{ marginTop: '0.25rem', marginBottom: '0.75rem', fontSize: '1rem', color: 'var(--text-muted)' }}>
-              {lang === 'hi-IN' ? 'इनमें से कोई एक बात कहें' : 'Say any one of these'}
+            <summary style={{ minHeight: '64px', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'var(--text)', fontSize: '1.1rem', fontWeight: 700 }}>
+              {lang === 'hi-IN' ? 'आवाज़ के निर्देश' : 'Voice command examples'}
+            </summary>
+            <p style={{ margin: '0.25rem 0 0.75rem', fontSize: '1rem', color: 'var(--text-muted)' }}>
+              {lang === 'hi-IN' ? 'इनमें से कोई एक बात कहें' : 'Try one of these'}
             </p>
             <ul
               aria-label={lang === 'hi-IN' ? 'आवाज़ के निर्देश' : 'Voice command examples'}
-              style={{ listStyle: 'none', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.75rem 1rem', padding: 0, margin: 0 }}
+              style={{ listStyle: 'none', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.75rem 1rem', padding: 0, margin: '0 0 1rem' }}
             >
               {(lang === 'hi-IN'
                 ? ['“Scanner kholo”', '“Merchant portal kholo”', '“Hisaab sunao”', '“PayPal balance batao”', '“Family portal kholo”', '“Settings kholo”', '“Dobara bolo”']
@@ -1384,7 +1373,7 @@ export const App: React.FC = () => {
                 </li>
               ))}
             </ul>
-          </section>
+          </details>
           <nav aria-label={lang === 'hi-IN' ? 'App pages' : 'App shortcuts'} style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '1rem', width: '100%', marginTop: '0.5rem' }}>
             <button
               type="button"

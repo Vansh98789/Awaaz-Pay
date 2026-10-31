@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import QRCode from 'qrcode';
 import crypto from 'node:crypto';
 import {
@@ -20,14 +20,14 @@ import {
 import { parseInvoiceQr } from '../payments/qrParser.js';
 import { preparePayment, confirmPayment } from '../payments/pipeline.js';
 
-export function createMerchantRouter(db: Database.Database): Router {
+export function createMerchantRouter(db: Database): Router {
   const router = Router();
 
   // Create a shareable Awaaz Pay recipient QR with no amount attached.
   router.post('/recipient-qr', async (req: Request, res: Response) => {
     try {
       const merchantId = typeof req.body.merchantId === 'string' ? req.body.merchantId : 'merchant_ravi_cabs';
-      const merchant = getMerchantById(db, merchantId);
+      const merchant = await getMerchantById(db, merchantId);
       if (!merchant) {
         res.status(404).json({ error: 'Recipient not found' });
         return;
@@ -84,17 +84,16 @@ export function createMerchantRouter(db: Database.Database): Router {
         return;
       }
 
-      let merchant = merchantId ? getMerchantById(db, merchantId) : null;
+      let merchant = merchantId ? await getMerchantById(db, merchantId) : null;
       if (!merchantId) {
         if (!merchantName || merchantName.length > 80 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestedEmail) || requestedEmail.length > 254) {
           res.status(400).json({ error: 'Enter a business name and valid PayPal Sandbox email' });
           return;
         }
 
-        const existing = db.prepare<[string], { id: string }>(
-          'SELECT id FROM merchants WHERE paypal_email = ? LIMIT 1'
-        ).get(requestedEmail);
-        merchant = upsertMerchant(db, {
+        const existing = (await db.query<{ id: string }>(
+          'SELECT id FROM merchants WHERE paypal_email = $1 LIMIT 1', [requestedEmail]))[0];
+        merchant = await upsertMerchant(db, {
           id: existing?.id || `merchant_${crypto.randomUUID()}`,
           name: merchantName,
           paypal_email: requestedEmail,
@@ -161,7 +160,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       });
 
       // Save invoice in our local DB registry
-      const invoice = createInvoiceRecord(db, {
+      const invoice = await createInvoiceRecord(db, {
         merchant_id: merchant.id,
         paypal_invoice_id: paypalInvoiceId,
         amount: Number(amount),
@@ -169,11 +168,11 @@ export function createMerchantRouter(db: Database.Database): Router {
         status: paypalInvoiceSent ? 'SENT' : 'OPEN',
       });
 
-      const defaultUser = getUserById(db, 'user_meena');
-      const auditUserId = defaultUser?.id || (db.prepare('SELECT id FROM users LIMIT 1').get() as { id: string } | undefined)?.id;
+      const defaultUser = await getUserById(db, 'user_meena');
+      const auditUserId = defaultUser?.id || (await db.query<{ id: string }>('SELECT id FROM users ORDER BY id LIMIT 1'))[0]?.id;
 
       if (auditUserId) {
-        writeAudit(db, {
+        await writeAudit(db, {
           user_id: auditUserId,
           kind: 'merchant_invoice_created',
           payload: JSON.stringify({
@@ -208,7 +207,7 @@ export function createMerchantRouter(db: Database.Database): Router {
   });
 
   // 2. Lookup invoice details from our registry
-  router.get('/invoices/:idOrPaypalId', (req: Request, res: Response) => {
+  router.get('/invoices/:idOrPaypalId', async (req: Request, res: Response) => {
     try {
       const param = Array.isArray(req.params.idOrPaypalId)
         ? req.params.idOrPaypalId[0]
@@ -220,7 +219,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       }
 
       const invoice =
-        getInvoiceByPaypalId(db, param) || getInvoiceById(db, param);
+        await getInvoiceByPaypalId(db, param) || await getInvoiceById(db, param);
 
       if (!invoice) {
         res.status(404).json({ error: 'Invoice not found in merchant registry' });
@@ -246,7 +245,7 @@ export function createMerchantRouter(db: Database.Database): Router {
   });
 
   // 3. Scan QR code endpoint: parses QR data and retrieves invoice from registry
-  router.post('/invoices/scan', (req: Request, res: Response) => {
+  router.post('/invoices/scan', async (req: Request, res: Response) => {
     try {
       const { qrData, userId = 'user_meena' } = req.body;
       if (!qrData || typeof qrData !== 'string') {
@@ -261,8 +260,8 @@ export function createMerchantRouter(db: Database.Database): Router {
       }
 
       const invoice =
-        getInvoiceByPaypalId(db, parsedInvoiceId) ||
-        getInvoiceById(db, parsedInvoiceId);
+        await getInvoiceByPaypalId(db, parsedInvoiceId) ||
+        await getInvoiceById(db, parsedInvoiceId);
 
       if (!invoice) {
         res.status(404).json({
@@ -271,7 +270,7 @@ export function createMerchantRouter(db: Database.Database): Router {
         return;
       }
 
-      const user = getUserById(db, userId);
+      const user = await getUserById(db, userId);
       const isHindi = user?.language !== 'en';
 
       const readbackHindi = `${invoice.merchant_name}, ${invoice.amount.toFixed(2)} US dollars. Kya main bhej doon?`;
@@ -310,7 +309,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       }
 
       const invoice =
-        getInvoiceByPaypalId(db, invoiceId) || getInvoiceById(db, invoiceId);
+        await getInvoiceByPaypalId(db, invoiceId) || await getInvoiceById(db, invoiceId);
 
       if (!invoice) {
         res.status(404).json({ error: 'Invoice not found in merchant registry' });
@@ -323,7 +322,7 @@ export function createMerchantRouter(db: Database.Database): Router {
       }
 
       // The amount is locked to the invoice amount
-      const prep = preparePayment(db, {
+      const prep = await preparePayment(db, {
         userId,
         payee: invoice.merchant_name,
         amount: invoice.amount,
@@ -360,7 +359,7 @@ export function createMerchantRouter(db: Database.Database): Router {
 
         if (result.status === 'completed') {
           // Update invoice status to PAID in local registry
-          updateInvoiceStatus(db, invoice.paypal_invoice_id, 'PAID');
+          await updateInvoiceStatus(db, invoice.paypal_invoice_id, 'PAID');
 
           // Record payment on PayPal if possible
           if (!invoice.paypal_invoice_id.startsWith('AWZ-INV-')) {

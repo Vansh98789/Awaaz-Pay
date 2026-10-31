@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import type { Transaction } from '../db/types.js';
 
 export interface SevenDaySummaryFacts {
@@ -17,42 +17,31 @@ export interface SevenDaySummaryFacts {
   };
 }
 
-export function getSevenDaySummary(
-  db: Database.Database,
+export async function getSevenDaySummary(
+  db: Database,
   userId = 'user_meena'
-): SevenDaySummaryFacts {
+): Promise<SevenDaySummaryFacts> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   // Completed PayPal payouts are the source of sent-payment history.
-  const txEntries = db
-    .prepare<[string, string], Transaction>(
-      "SELECT * FROM transactions WHERE user_id = ? AND created_at >= ? AND status = 'completed' ORDER BY created_at DESC, rowid DESC"
-    )
-    .all(userId, sevenDaysAgo);
+  const txEntries = await db.query<Transaction & { payee_name: string | null }>(
+    `SELECT t.*, COALESCE(c.display_name, m.name) AS payee_name FROM transactions t
+     LEFT JOIN contacts c ON t.counterparty_type = 'contact' AND c.id = t.counterparty_id
+     LEFT JOIN merchants m ON t.counterparty_type = 'merchant' AND m.id = t.counterparty_id
+     WHERE t.user_id = $1 AND t.created_at >= $2 AND t.status = 'completed'
+     ORDER BY t.created_at DESC, t.id DESC`, [userId, sevenDaysAgo]);
 
   const paymentCount = txEntries.length;
-  const moneyOut = txEntries.reduce((sum, tx) => sum + tx.amount, 0);
-  const largestPayment = txEntries.reduce((max, tx) => Math.max(max, tx.amount), 0);
+  const moneyOut = txEntries.reduce((sum, tx) => sum + Number(tx.amount), 0);
+  const largestPayment = txEntries.reduce((max, tx) => Math.max(max, Number(tx.amount)), 0);
 
   // 3. Format list of transactions with resolved payee names
   const transactions = txEntries.map((tx) => {
-    let payee = tx.counterparty_id;
-    if (tx.counterparty_type === 'contact') {
-      const c = db
-        .prepare<[string], { display_name: string }>('SELECT display_name FROM contacts WHERE id = ?')
-        .get(tx.counterparty_id);
-      if (c) payee = c.display_name;
-    } else if (tx.counterparty_type === 'merchant') {
-      const m = db
-        .prepare<[string], { name: string }>('SELECT name FROM merchants WHERE id = ?')
-        .get(tx.counterparty_id);
-      if (m) payee = m.name;
-    }
-
+    const payee = tx.payee_name || tx.counterparty_id;
     return {
       id: tx.id,
       payee,
-      amount: tx.amount,
+      amount: Number(tx.amount),
       time: tx.created_at,
     };
   });
@@ -95,15 +84,15 @@ export interface PaymentExplanationFacts {
   };
 }
 
-export function explainRecentPayment(
-  db: Database.Database,
+export async function explainRecentPayment(
+  db: Database,
   userId = 'user_meena'
-): PaymentExplanationFacts {
-  const tx = db
-    .prepare<[string], Transaction>(
-      "SELECT * FROM transactions WHERE user_id = ? AND status = 'completed' ORDER BY created_at DESC, rowid DESC LIMIT 1"
-    )
-    .get(userId);
+): Promise<PaymentExplanationFacts> {
+  const tx = (await db.query<Transaction & { payee_name: string | null }>(
+    `SELECT t.*, COALESCE(c.display_name, m.name) AS payee_name FROM transactions t
+     LEFT JOIN contacts c ON t.counterparty_type = 'contact' AND c.id = t.counterparty_id
+     LEFT JOIN merchants m ON t.counterparty_type = 'merchant' AND m.id = t.counterparty_id
+     WHERE t.user_id = $1 AND t.status = 'completed' ORDER BY t.created_at DESC, t.id DESC LIMIT 1`, [userId]))[0];
 
   if (!tx) {
     return {
@@ -115,21 +104,10 @@ export function explainRecentPayment(
     };
   }
 
-  let payee = tx.counterparty_id;
-  if (tx.counterparty_type === 'contact') {
-    const c = db
-      .prepare<[string], { display_name: string }>('SELECT display_name FROM contacts WHERE id = ?')
-      .get(tx.counterparty_id);
-    if (c) payee = c.display_name;
-  } else if (tx.counterparty_type === 'merchant') {
-    const m = db
-      .prepare<[string], { name: string }>('SELECT name FROM merchants WHERE id = ?')
-      .get(tx.counterparty_id);
-    if (m) payee = m.name;
-  }
+  const payee = tx.payee_name || tx.counterparty_id;
 
   const fee = 0;
-  const amount = tx.amount;
+  const amount = Number(tx.amount);
 
   const hi = `Aakhri payment ${payee} ko ${amount.toFixed(2)} US dollars ka kiya gaya tha. Isme koi fee nahi lagi. PayPal ne payment complete ki. Dhyan rahe, yeh payment wapas nahi ho sakta.`;
   const en = `Your most recent payment was $${amount.toFixed(2)} to ${payee}. There was zero fee, and PayPal marked it complete. Note that once sent, it may not be reversible.`;
@@ -147,23 +125,21 @@ export function explainRecentPayment(
   };
 }
 
-export function getLastSenderAmount(
-  db: Database.Database,
+export async function getLastSenderAmount(
+  db: Database,
   userId = 'user_meena',
   personName = 'Ramesh'
-): { found: boolean; amount?: number; personName: string; spokenText: { hi: string; en: string } } {
+): Promise<{ found: boolean; amount?: number; personName: string; spokenText: { hi: string; en: string } }> {
   const pattern = `%${personName.toLowerCase()}%`;
 
   // Only completed PayPal payouts are payment history; old local wallet entries
   // are not part of the PayPal account balance or transfer history.
-  const txMatch = db
-    .prepare<[string, string], Transaction>(
-      'SELECT * FROM transactions WHERE user_id = ? AND (LOWER(counterparty_id) LIKE ?) ORDER BY created_at DESC LIMIT 1'
-    )
-    .get(userId, pattern);
+  const txMatch = (await db.query<Transaction>(
+    "SELECT * FROM transactions WHERE user_id = $1 AND status = 'completed' AND LOWER(counterparty_id) LIKE $2 ORDER BY created_at DESC LIMIT 1",
+    [userId, pattern]))[0];
 
   if (txMatch) {
-    const amount = txMatch.amount;
+    const amount = Number(txMatch.amount);
     return {
       found: true,
       amount,

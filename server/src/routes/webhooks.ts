@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import { verifyWebhookSignature } from '../paypal/index.js';
 import {
   addLedgerEntry,
@@ -9,7 +9,7 @@ import {
 } from '../db/repository.js';
 import { formatFundingNotificationHindi } from '../notifications/templates.js';
 
-export function createWebhooksRouter(db: Database.Database): Router {
+export function createWebhooksRouter(db: Database): Router {
   const router = Router();
 
   router.post('/paypal', async (req: Request, res: Response) => {
@@ -51,12 +51,12 @@ export function createWebhooksRouter(db: Database.Database): Router {
         const senderName = resource?.payer?.name?.given_name || 'Ramesh';
 
         const ref = `paypal_webhook_${eventId}`;
-        if (hasLedgerRef(db, ref)) {
+        if (await hasLedgerRef(db, ref)) {
           res.status(200).json({ status: 'ignored_duplicate', eventId });
           return;
         }
 
-        addLedgerEntry(db, {
+        await addLedgerEntry(db, {
           user_id: userId,
           delta: amount,
           reason: `PayPal received (${senderName})`,
@@ -65,14 +65,14 @@ export function createWebhooksRouter(db: Database.Database): Router {
 
         const spokenText = formatFundingNotificationHindi(senderName, amount, currency);
 
-        createNotification(db, {
+        await createNotification(db, {
           user_id: userId,
           kind: 'received_money',
           message: `Received ${amount} from ${senderName}`,
           spoken_text: spokenText,
         });
 
-        writeAudit(db, {
+        await writeAudit(db, {
           user_id: userId,
           kind: 'paypal_webhook_processed',
           payload: JSON.stringify({ eventId, captureId, amount, currency }),

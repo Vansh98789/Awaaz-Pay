@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import {
   getApprovalByToken,
   getApprovalByTransactionId,
@@ -13,45 +13,41 @@ import {
 import { confirmPayment } from '../payments/pipeline.js';
 import { requireFamilyAuth } from '../auth/familyAuth.js';
 
-export function createApprovalsRouter(db: Database.Database): Router {
+export function createApprovalsRouter(db: Database): Router {
   const router = Router();
   router.use(requireFamilyAuth);
 
   // 1. Get approval details by token
-  router.get('/:token', (req: Request, res: Response) => {
+  router.get('/:token', async (req: Request, res: Response) => {
     try {
       const token = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token;
       if (!token) {
         res.status(400).json({ error: 'Token is required' });
         return;
       }
-      const approval = getApprovalByToken(db, token);
+      const approval = await getApprovalByToken(db, token);
 
       if (!approval) {
         res.status(404).json({ error: 'Approval request not found' });
         return;
       }
 
-      const tx = getTransactionById(db, approval.transaction_id);
+      const tx = await getTransactionById(db, approval.transaction_id);
       if (!tx) {
         res.status(404).json({ error: 'Associated transaction not found' });
         return;
       }
-      const user = getUserById(db, tx.user_id);
+      const user = await getUserById(db, tx.user_id);
       const isExpired =
         !!approval.expires_at && new Date() > new Date(approval.expires_at);
 
       // Find payee display name
       let payeeName = tx.counterparty_id;
       if (tx.counterparty_type === 'contact') {
-        const c = db
-          .prepare<[string], { display_name: string }>('SELECT display_name FROM contacts WHERE id = ?')
-          .get(tx.counterparty_id);
+        const c = (await db.query<{ display_name: string }>('SELECT display_name FROM contacts WHERE id = $1', [tx.counterparty_id]))[0];
         if (c) payeeName = c.display_name;
       } else if (tx.counterparty_type === 'merchant') {
-        const m = db
-          .prepare<[string], { name: string }>('SELECT name FROM merchants WHERE id = ?')
-          .get(tx.counterparty_id);
+        const m = (await db.query<{ name: string }>('SELECT name FROM merchants WHERE id = $1', [tx.counterparty_id]))[0];
         if (m) payeeName = m.name;
       }
 
@@ -91,7 +87,7 @@ export function createApprovalsRouter(db: Database.Database): Router {
         return;
       }
 
-      const approval = getApprovalByToken(db, token);
+      const approval = await getApprovalByToken(db, token);
       if (!approval) {
         res.status(404).json({ error: 'Approval request not found' });
         return;
@@ -105,14 +101,14 @@ export function createApprovalsRouter(db: Database.Database): Router {
         return;
       }
 
-      const tx = getTransactionById(db, approval.transaction_id);
+      const tx = await getTransactionById(db, approval.transaction_id);
       if (!tx) {
         res.status(404).json({ error: 'Transaction not found' });
         return;
       }
       if (approval.expires_at && new Date() > new Date(approval.expires_at)) {
-        updateApprovalStatus(db, token, 'expired');
-        updateTransactionStatus(db, tx.id, 'failed');
+        await updateApprovalStatus(db, token, 'expired');
+        await updateTransactionStatus(db, tx.id, 'failed');
         res.status(400).json({ error: 'Approval request expired. No PayPal payout was sent.' });
         return;
       }
@@ -121,24 +117,20 @@ export function createApprovalsRouter(db: Database.Database): Router {
         return;
       }
 
-      const guardian = db
-        .prepare<[string], { name: string }>('SELECT name FROM guardians WHERE id = ?')
-        .get(approval.guardian_id);
+      const guardian = (await db.query<{ name: string }>('SELECT name FROM guardians WHERE id = $1', [approval.guardian_id]))[0];
       const guardianName = guardian?.name || 'Ramesh';
 
       let payeeName = tx.counterparty_id;
       if (tx.counterparty_type === 'contact') {
-        const c = db
-          .prepare<[string], { display_name: string }>('SELECT display_name FROM contacts WHERE id = ?')
-          .get(tx.counterparty_id);
+        const c = (await db.query<{ display_name: string }>('SELECT display_name FROM contacts WHERE id = $1', [tx.counterparty_id]))[0];
         if (c) payeeName = c.display_name;
       }
 
       if (decision === 'approve') {
-        updateApprovalStatus(db, token, 'approved');
-        updateTransactionStatus(db, tx.id, 'confirmed');
+        await updateApprovalStatus(db, token, 'approved');
+        await updateTransactionStatus(db, tx.id, 'confirmed');
 
-        writeAudit(db, {
+        await writeAudit(db, {
           user_id: tx.user_id,
           kind: 'guardian_approval_approved',
           payload: JSON.stringify({
@@ -150,7 +142,7 @@ export function createApprovalsRouter(db: Database.Database): Router {
           }),
         });
 
-        createNotification(db, {
+        await createNotification(db, {
           user_id: tx.user_id,
           kind: 'approval_granted',
           message: `${guardianName} approved payment of $${tx.amount.toFixed(2)} to ${payeeName}.`,
@@ -174,10 +166,10 @@ export function createApprovalsRouter(db: Database.Database): Router {
               : payment.message || payment.error || 'The payment could not be sent.',
         });
       } else {
-        updateApprovalStatus(db, token, 'denied');
-        updateTransactionStatus(db, tx.id, 'failed');
+        await updateApprovalStatus(db, token, 'denied');
+        await updateTransactionStatus(db, tx.id, 'failed');
 
-        writeAudit(db, {
+        await writeAudit(db, {
           user_id: tx.user_id,
           kind: 'guardian_approval_denied',
           payload: JSON.stringify({
@@ -189,7 +181,7 @@ export function createApprovalsRouter(db: Database.Database): Router {
           }),
         });
 
-        createNotification(db, {
+        await createNotification(db, {
           user_id: tx.user_id,
           kind: 'approval_denied',
           message: `${guardianName} denied payment of $${tx.amount.toFixed(2)} to ${payeeName}.`,
@@ -208,7 +200,7 @@ export function createApprovalsRouter(db: Database.Database): Router {
   });
 
   // 3. Poll approval status by transactionId
-  router.get('/status/:transactionId', (req: Request, res: Response) => {
+  router.get('/status/:transactionId', async (req: Request, res: Response) => {
     try {
       const transactionId = Array.isArray(req.params.transactionId)
         ? req.params.transactionId[0]
@@ -217,8 +209,8 @@ export function createApprovalsRouter(db: Database.Database): Router {
         res.status(400).json({ error: 'Transaction ID is required' });
         return;
       }
-      const approval = getApprovalByTransactionId(db, transactionId);
-      const tx = getTransactionById(db, transactionId);
+      const approval = await getApprovalByTransactionId(db, transactionId);
+      const tx = await getTransactionById(db, transactionId);
 
       if (!tx) {
         res.status(404).json({ error: 'Transaction not found' });

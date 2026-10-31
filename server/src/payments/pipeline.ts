@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import { evaluatePayment } from '../rules/engine.js';
 import type { Decision, PaymentRequest, ScamRiskLevel } from '../rules/types.js';
 import { createPayoutBatch, getPayoutBatch } from '../paypal/index.js';
@@ -50,10 +50,10 @@ export function generateReadbackText(
   return `${displayName} ko ${amount.toFixed(2)} US dollars bheje ja rahe hain. Koi extra fee nahi hai. Kripya confirm karein.`;
 }
 
-export function preparePayment(
-  db: Database.Database,
+export async function preparePayment(
+  db: Database,
   params: PreparePaymentParams
-): PreparePaymentResult {
+): Promise<PreparePaymentResult> {
   const {
     userId = 'user_meena',
     payee,
@@ -70,13 +70,13 @@ export function preparePayment(
     throw new Error('Valid positive amount is required');
   }
 
-  const user = getUserById(db, userId);
+  const user = await getUserById(db, userId);
   if (!user) {
     throw new Error('User not found');
   }
 
-  const resolvedPayee = resolvePayee(db, userId, payee);
-  const { context } = buildPaymentContext(
+  const resolvedPayee = await resolvePayee(db, userId, payee);
+  const { context } = await buildPaymentContext(
     db,
     user,
     resolvedPayee,
@@ -103,7 +103,7 @@ export function preparePayment(
 
   const status = decision.action === 'block' ? 'failed' : 'pending_confirmation';
 
-  const tx = recordTransaction(db, {
+  const tx = await recordTransaction(db, {
     user_id: userId,
     type: 'send_money',
     amount,
@@ -117,7 +117,7 @@ export function preparePayment(
     paypal_ref: null,
   });
 
-  writeAudit(db, {
+  await writeAudit(db, {
     user_id: userId,
     kind: 'payment_prepared',
     payload: JSON.stringify({
@@ -167,10 +167,10 @@ export interface ConfirmPaymentResult {
 }
 
 export async function refreshPayoutStatus(
-  db: Database.Database,
+  db: Database,
   transactionId: string
 ): Promise<{ status: string | null; paypalStatus?: string }> {
-  const tx = getTransactionById(db, transactionId);
+  const tx = await getTransactionById(db, transactionId);
   if (!tx) return { status: null };
   if (tx.status !== 'processing' || !tx.paypal_ref) return { status: tx.status };
 
@@ -186,19 +186,19 @@ export async function refreshPayoutStatus(
   const status = itemStatus || batchStatus || 'PENDING';
 
   if (status === 'SUCCESS') {
-    updateTransactionStatus(db, tx.id, 'completed', tx.paypal_ref);
-    writeAudit(db, {
+    await updateTransactionStatus(db, tx.id, 'completed', tx.paypal_ref);
+    await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_completed',
       payload: JSON.stringify({ transactionId: tx.id, batchId: tx.paypal_ref, amount: tx.amount }),
     });
 
     if (tx.counterparty_type === 'merchant') {
-      const invoice = db.prepare<[string, number], { id: string; paypal_invoice_id: string; currency: string }>(
-        "SELECT id, paypal_invoice_id, currency FROM invoices WHERE merchant_id = ? AND amount = ? AND status != 'PAID' ORDER BY rowid DESC LIMIT 1"
-      ).get(tx.counterparty_id, tx.amount);
+      const invoice = (await db.query<{ id: string; paypal_invoice_id: string; currency: string }>(
+        "SELECT id, paypal_invoice_id, currency FROM invoices WHERE merchant_id = $1 AND amount = $2 AND status != 'PAID' ORDER BY id DESC LIMIT 1",
+        [tx.counterparty_id, tx.amount]))[0];
       if (invoice) {
-        db.prepare("UPDATE invoices SET status = 'PAID' WHERE id = ?").run(invoice.id);
+        await db.query("UPDATE invoices SET status = 'PAID' WHERE id = $1", [invoice.id]);
         if (!invoice.paypal_invoice_id.startsWith('AWZ-INV-')) {
           const { recordInvoicePayment } = await import('../paypal/invoices.js');
           await recordInvoicePayment(invoice.paypal_invoice_id, tx.amount, invoice.currency).catch(() => {});
@@ -209,8 +209,8 @@ export async function refreshPayoutStatus(
   }
 
   if (['FAILED', 'DENIED', 'CANCELED', 'CANCELLED', 'BLOCKED', 'RETURNED', 'REFUNDED', 'REVERSED'].includes(status)) {
-    updateTransactionStatus(db, tx.id, 'failed', tx.paypal_ref);
-    writeAudit(db, {
+    await updateTransactionStatus(db, tx.id, 'failed', tx.paypal_ref);
+    await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_payout_failed',
       payload: JSON.stringify({ transactionId: tx.id, batchId: tx.paypal_ref, paypalStatus: status }),
@@ -222,7 +222,7 @@ export async function refreshPayoutStatus(
 }
 
 export async function confirmPayment(
-  db: Database.Database,
+  db: Database,
   params: ConfirmPaymentParams
 ): Promise<ConfirmPaymentResult> {
   const { transactionId, userConfirmed } = params;
@@ -235,7 +235,7 @@ export async function confirmPayment(
     };
   }
 
-  const tx = getTransactionById(db, transactionId);
+  const tx = await getTransactionById(db, transactionId);
   if (!tx) {
     return {
       status: 'error',
@@ -300,12 +300,12 @@ export async function confirmPayment(
   }
 
   if (!userConfirmed) {
-    const approval = getApprovalByTransactionId(db, tx.id);
+    const approval = await getApprovalByTransactionId(db, tx.id);
     if (approval?.status === 'pending' || approval?.status === 'awaiting_user_confirmation') {
-      updateApprovalStatus(db, approval.token, 'cancelled');
+      await updateApprovalStatus(db, approval.token, 'cancelled');
     }
-    updateTransactionStatus(db, tx.id, 'cancelled');
-    writeAudit(db, {
+    await updateTransactionStatus(db, tx.id, 'cancelled');
+    await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_cancelled',
       payload: JSON.stringify({ transactionId: tx.id }),
@@ -321,13 +321,11 @@ export async function confirmPayment(
   // Risky or unverified payments first require the user's spoken readback confirmation.
   // PayPal's Business Sandbox balance is the only funds source; no local INR balance is reserved.
   if (tx.decision === 'need_guardian_approval' && tx.status === 'pending_confirmation') {
-    const guardian = db
-      .prepare<[string], { id: string }>('SELECT id FROM guardians WHERE user_id = ? LIMIT 1')
-      .get(tx.user_id);
+    const guardian = (await db.query<{ id: string }>('SELECT id FROM guardians WHERE user_id = $1 LIMIT 1', [tx.user_id]))[0];
     const guardianId = guardian?.id || 'guardian_ramesh';
     const approvalToken = crypto.randomUUID().replace(/-/g, '');
     const approvalUrl = `/approve/${approvalToken}`;
-    createApproval(db, {
+    await createApproval(db, {
       transaction_id: tx.id,
       guardian_id: guardianId,
       token: approvalToken,
@@ -335,25 +333,21 @@ export async function confirmPayment(
       created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
     });
-    updateTransactionStatus(db, tx.id, 'awaiting_approval');
+    await updateTransactionStatus(db, tx.id, 'awaiting_approval');
 
     let payeeName = tx.counterparty_id;
     if (tx.counterparty_type === 'contact') {
-      payeeName = db.prepare<[string], { display_name: string }>(
-        'SELECT display_name FROM contacts WHERE id = ?'
-      ).get(tx.counterparty_id)?.display_name || payeeName;
+      payeeName = (await db.query<{ display_name: string }>('SELECT display_name FROM contacts WHERE id = $1', [tx.counterparty_id]))[0]?.display_name || payeeName;
     } else if (tx.counterparty_type === 'merchant') {
-      payeeName = db.prepare<[string], { name: string }>(
-        'SELECT name FROM merchants WHERE id = ?'
-      ).get(tx.counterparty_id)?.name || payeeName;
+      payeeName = (await db.query<{ name: string }>('SELECT name FROM merchants WHERE id = $1', [tx.counterparty_id]))[0]?.name || payeeName;
     }
-    createNotification(db, {
+    await createNotification(db, {
       user_id: tx.user_id,
       kind: 'approval_requested',
       message: `Guardian approval requested for $${tx.amount.toFixed(2)} to ${payeeName}.`,
       spoken_text: 'Approval request sent to your family member.',
     });
-    writeAudit(db, {
+    await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'guardian_approval_requested',
       payload: JSON.stringify({ transactionId: tx.id, amount: tx.amount, payee: payeeName }),
@@ -367,7 +361,7 @@ export async function confirmPayment(
   }
 
   if (tx.status === 'awaiting_approval') {
-    const approval = getApprovalByTransactionId(db, tx.id);
+    const approval = await getApprovalByTransactionId(db, tx.id);
     return {
       status: 'awaiting_approval', transactionId: tx.id,
       approvalToken: approval?.token,
@@ -377,8 +371,8 @@ export async function confirmPayment(
     };
   }
 
-  updateTransactionStatus(db, tx.id, 'processing');
-  writeAudit(db, {
+  await updateTransactionStatus(db, tx.id, 'processing');
+  await writeAudit(db, {
     user_id: tx.user_id,
     kind: 'payment_confirmed_processing',
     payload: JSON.stringify({ transactionId: tx.id, amount: tx.amount }),
@@ -386,9 +380,7 @@ export async function confirmPayment(
 
   let recipientEmail = '';
   if (tx.counterparty_type === 'contact') {
-    const c = db
-      .prepare<[string], { paypal_email: string }>('SELECT paypal_email FROM contacts WHERE id = ?')
-      .get(tx.counterparty_id);
+    const c = (await db.query<{ paypal_email: string }>('SELECT paypal_email FROM contacts WHERE id = $1', [tx.counterparty_id]))[0];
     if (tx.counterparty_id === 'contact_sabzi_wala' && config.PAYPAL_SANDBOX_VEGETABLE_VENDOR_EMAIL) {
       recipientEmail = config.PAYPAL_SANDBOX_VEGETABLE_VENDOR_EMAIL;
     } else if (tx.counterparty_id === 'contact_doodh_wala' && config.PAYPAL_SANDBOX_MILK_VENDOR_EMAIL) {
@@ -397,9 +389,7 @@ export async function confirmPayment(
       recipientEmail = c.paypal_email;
     }
   } else if (tx.counterparty_type === 'merchant') {
-    const m = db
-      .prepare<[string], { paypal_email: string }>('SELECT paypal_email FROM merchants WHERE id = ?')
-      .get(tx.counterparty_id);
+    const m = (await db.query<{ paypal_email: string }>('SELECT paypal_email FROM merchants WHERE id = $1', [tx.counterparty_id]))[0];
     if (m?.paypal_email && !m.paypal_email.endsWith('@example.com')) {
       recipientEmail = m.paypal_email;
     } else if (tx.counterparty_id === 'merchant_ravi_cabs') {
@@ -455,8 +445,8 @@ export async function confirmPayment(
     }
 
     if (batchStatus !== 'SUCCESS') {
-      updateTransactionStatus(db, tx.id, 'processing', batchId);
-      writeAudit(db, {
+      await updateTransactionStatus(db, tx.id, 'processing', batchId);
+      await writeAudit(db, {
         user_id: tx.user_id,
         kind: 'payment_payout_pending',
         payload: JSON.stringify({ transactionId: tx.id, batchId, batchStatus, paypalAmount, paypalCurrency }),
@@ -474,8 +464,8 @@ export async function confirmPayment(
   } catch (err) {
     const errMsg = (err as Error).message || '';
     const insufficientFunds = /INSUFFICIENT_FUNDS|insufficient funds/i.test(errMsg);
-    updateTransactionStatus(db, tx.id, 'failed');
-    writeAudit(db, {
+    await updateTransactionStatus(db, tx.id, 'failed');
+    await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_payout_failed',
       payload: JSON.stringify({ transactionId: tx.id, error: errMsg }),
@@ -492,18 +482,16 @@ export async function confirmPayment(
     };
   }
 
-    updateTransactionStatus(db, tx.id, 'completed', batchId);
+    await updateTransactionStatus(db, tx.id, 'completed', batchId);
 
     // If payment was made to a merchant, update invoice status in registry & PayPal
     if (tx.counterparty_type === 'merchant') {
       try {
-        const inv = db
-          .prepare<[string, number], { id: string; paypal_invoice_id: string; currency: string }>(
-            "SELECT id, paypal_invoice_id, currency FROM invoices WHERE merchant_id = ? AND amount = ? AND status != 'PAID' ORDER BY rowid DESC LIMIT 1"
-          )
-          .get(tx.counterparty_id, tx.amount);
+        const inv = (await db.query<{ id: string; paypal_invoice_id: string; currency: string }>(
+          "SELECT id, paypal_invoice_id, currency FROM invoices WHERE merchant_id = $1 AND amount = $2 AND status != 'PAID' ORDER BY id DESC LIMIT 1",
+          [tx.counterparty_id, tx.amount]))[0];
         if (inv) {
-          db.prepare("UPDATE invoices SET status = 'PAID' WHERE id = ?").run(inv.id);
+          await db.query("UPDATE invoices SET status = 'PAID' WHERE id = $1", [inv.id]);
           if (!inv.paypal_invoice_id.startsWith('AWZ-INV-')) {
             import('../paypal/invoices.js')
               .then(({ recordInvoicePayment }) => {
@@ -517,7 +505,7 @@ export async function confirmPayment(
       }
     }
 
-    writeAudit(db, {
+    await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_completed',
       payload: JSON.stringify({ transactionId: tx.id, batchId, amount: tx.amount, paypalAmount, paypalCurrency }),

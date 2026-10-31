@@ -1,14 +1,14 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import { preparePayment, confirmPayment, refreshPayoutStatus } from '../payments/pipeline.js';
 import { getApprovalByTransactionId, getTransactionById } from '../db/repository.js';
 
-export function createPaymentsRouter(db: Database.Database): Router {
+export function createPaymentsRouter(db: Database): Router {
   const router = Router();
 
-  router.post('/prepare', (req: Request, res: Response) => {
+  router.post('/prepare', async (req: Request, res: Response) => {
     try {
-      const result = preparePayment(db, req.body);
+      const result = await preparePayment(db, req.body);
       res.status(200).json(result);
     } catch (err) {
       const msg = (err as Error).message;
@@ -30,12 +30,12 @@ export function createPaymentsRouter(db: Database.Database): Router {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       const payoutSync = await refreshPayoutStatus(db, id);
-      const tx = getTransactionById(db, id);
+      const tx = await getTransactionById(db, id);
       if (!tx) {
         res.status(404).json({ error: 'Transaction not found' });
         return;
       }
-      const approval = getApprovalByTransactionId(db, id);
+      const approval = await getApprovalByTransactionId(db, id);
       res.status(200).json({
         transaction: tx,
         paypalStatus: payoutSync.paypalStatus,

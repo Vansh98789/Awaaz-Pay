@@ -4,7 +4,7 @@ import express, { type Express, type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from './db/connection.js';
 import { getDb } from './db/connection.js';
 import { createFamilyRouter } from './routes/family.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
@@ -27,7 +27,7 @@ export interface HealthResponse {
   time: string;
 }
 
-export function createApp(db?: Database.Database): Express {
+export function createApp(db?: Database): Express {
   const app = express();
   const database = db ?? getDb();
 

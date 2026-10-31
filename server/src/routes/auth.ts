@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -28,7 +28,7 @@ import {
 } from '../auth/voiceChallenge.js';
 import { isDemoAuthBypass } from '../auth/middleware.js';
 
-export function createAuthRouter(db: Database.Database): Router {
+export function createAuthRouter(db: Database): Router {
   const router = Router();
 
   const rpName = process.env.RP_NAME || 'Awaaz Pay';
@@ -47,10 +47,10 @@ export function createAuthRouter(db: Database.Database): Router {
   router.post('/register-options', async (req: Request, res: Response) => {
     try {
       const { userId = 'user_meena' } = req.body;
-      const user = getUserById(db, userId);
+      const user = await getUserById(db, userId);
       const userName = user?.name || 'Meena';
 
-      const existingPasskeys = getPasskeysByUserId(db, userId);
+      const existingPasskeys = await getPasskeysByUserId(db, userId);
 
       const options = await generateRegistrationOptions({
         rpName,
@@ -104,7 +104,7 @@ export function createAuthRouter(db: Database.Database): Router {
         const { credential, credentialDeviceType, credentialBackedUp } =
           verification.registrationInfo;
 
-        savePasskey(db, {
+        await savePasskey(db, {
           id: credential.id,
           user_id: userId,
           public_key: Buffer.from(credential.publicKey).toString('base64'),
@@ -143,7 +143,7 @@ export function createAuthRouter(db: Database.Database): Router {
   router.post('/login-options', async (req: Request, res: Response) => {
     try {
       const { userId = 'user_meena' } = req.body;
-      const userPasskeys = getPasskeysByUserId(db, userId);
+      const userPasskeys = await getPasskeysByUserId(db, userId);
 
       const options = await generateAuthenticationOptions({
         rpID,
@@ -171,7 +171,7 @@ export function createAuthRouter(db: Database.Database): Router {
         return;
       }
 
-      const passkey = getPasskeyById(db, response.id);
+      const passkey = await getPasskeyById(db, response.id);
       if (!passkey) {
         res.status(404).json({ error: 'Passkey not found in database' });
         return;
@@ -198,7 +198,7 @@ export function createAuthRouter(db: Database.Database): Router {
       });
 
       if (verification.verified) {
-        updatePasskeyCounter(db, passkey.id, verification.authenticationInfo.newCounter);
+        await updatePasskeyCounter(db, passkey.id, verification.authenticationInfo.newCounter);
         clearChallenge(userId, 'authentication');
 
         const sessionToken = createSession(passkey.user_id);
@@ -234,7 +234,7 @@ export function createAuthRouter(db: Database.Database): Router {
   });
 
   // 6. Voice Challenge - Verify
-  router.post('/voice-challenge/verify', (req: Request, res: Response) => {
+  router.post('/voice-challenge/verify', async (req: Request, res: Response) => {
     try {
       const { challengeId, transcript, userId = 'user_meena' } = req.body;
       if (!challengeId || typeof transcript !== 'string') {
@@ -242,7 +242,7 @@ export function createAuthRouter(db: Database.Database): Router {
         return;
       }
 
-      const result = verifyVoiceChallenge(db, userId, challengeId, transcript);
+      const result = await verifyVoiceChallenge(db, userId, challengeId, transcript);
       res.status(200).json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -250,7 +250,7 @@ export function createAuthRouter(db: Database.Database): Router {
   });
 
   // 7. Check current session
-  router.get('/me', (req: Request, res: Response) => {
+  router.get('/me', async (req: Request, res: Response) => {
     if (isDemoAuthBypass()) {
       res.status(200).json({
         authenticated: true,
@@ -283,7 +283,7 @@ export function createAuthRouter(db: Database.Database): Router {
   });
 
   // 8. Logout
-  router.post('/logout', (req: Request, res: Response) => {
+  router.post('/logout', async (req: Request, res: Response) => {
     const token = req.cookies?.[SESSION_COOKIE_NAME];
     if (token) {
       destroySession(token);

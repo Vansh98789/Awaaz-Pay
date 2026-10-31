@@ -1,10 +1,10 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import crypto from 'node:crypto';
 import { processConversation } from '../conversation/orchestrator.js';
 import { requireAuth } from '../auth/middleware.js';
 
-export function createConverseRouter(db: Database.Database): Router {
+export function createConverseRouter(db: Database): Router {
   const router = Router();
 
   router.post('/converse', requireAuth, async (req: Request, res: Response) => {

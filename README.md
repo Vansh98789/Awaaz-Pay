@@ -52,7 +52,7 @@ flowchart TD
     F["⚙️ Rules Engine\n(Deterministic)"]
     G["💸 Payment Pipeline"]
     H["💳 PayPal Sandbox APIs\n(Orders, Payouts, Invoicing)"]
-    I["🗄️ SQLite Database\n(better-sqlite3)"]
+    I["🗄️ Neon PostgreSQL\n(primary database)"]
     J["🛡️ Guardian Portal\n(/approve/:token)"]
     K["📋 Family Dashboard\n(AG Grid)"]
 
@@ -79,7 +79,7 @@ flowchart TD
 
 | Layer | Technologies |
 |-------|-------------|
-| **Backend** | Node.js, Express, TypeScript, better-sqlite3, Zod, Vitest |
+| **Backend** | Node.js, Express, TypeScript, Neon PostgreSQL, Zod, Vitest |
 | **Frontend** | React 18, Vite, TypeScript, AG Grid Community, jsQR, @simplewebauthn/browser |
 | **Payments** | PayPal Sandbox (Orders API, Payouts API, Invoicing QR, Webhooks) |
 | **AI / LLM** | Google Gemini 1.5 Flash (primary), Groq Llama 3 (fallback), deterministic regex fallback |
@@ -135,7 +135,7 @@ Create a `.env` file from `.env.example` and fill in the values:
 | `DEMO_SKIP_COOLING` | Skip contact cooling-off period in demo | `true` |
 | `DEMO_AUTH_BYPASS` | Bypass WebAuthn authentication in demo | `true` |
 | `CONTACT_COOLING_OFF_HOURS` | Hours before a new contact becomes trusted | `24` |
-| `DATABASE_PATH` | Path to SQLite database file | `./data/awaaz.db` |
+| `DATABASE_URL` | Neon PostgreSQL connection string | Required |
 
 ---
 

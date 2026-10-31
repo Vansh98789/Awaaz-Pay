@@ -43,7 +43,7 @@ export const DotWordmark: React.FC<DotWordmarkProps> = ({ size = 180, className 
   const dotRadius = 1.8;
   const colPitch = 5.2;
   const rowPitch = 5.2;
-  const letterSpacing = 4.5;
+  const letterSpacing = 8.5;
   const letterWidth = 4 * colPitch; // 5 columns (0..4)
 
   const totalWidth = WORD.length * letterWidth + (WORD.length - 1) * letterSpacing;

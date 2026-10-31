@@ -1,48 +1,27 @@
-import Database from 'better-sqlite3';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { config } from '../config.js';
+import { getNeonSql } from './neon.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-let defaultDb: Database.Database | null = null;
-
-export function getDefaultDbPath(): string {
-  return config.DATABASE_PATH || path.resolve(__dirname, '../../data/awaaz_pay.db');
+/** The application database is PostgreSQL on Neon. Queries are asynchronous. */
+export interface AppDatabase {
+  query<T = Record<string, unknown>>(
+    text: string,
+    params?: unknown[],
+  ): Promise<T[]>;
 }
 
-export function createDb(dbPath?: string): Database.Database {
-  const targetPath = dbPath || getDefaultDbPath();
+let defaultDb: AppDatabase | null = null;
 
-  if (targetPath !== ':memory:') {
-    const parentDir = path.dirname(targetPath);
-    if (!fs.existsSync(parentDir)) {
-      fs.mkdirSync(parentDir, { recursive: true });
-    }
+export function getDb(): AppDatabase {
+  if (defaultDb) return defaultDb;
+
+  const sql = getNeonSql();
+  if (!sql) {
+    throw new Error('DATABASE_URL is required. Configure the Neon PostgreSQL connection before starting the server.');
   }
-
-  const db = new Database(targetPath);
-  db.pragma('foreign_keys = ON');
-
-  if (targetPath !== ':memory:') {
-    db.pragma('journal_mode = WAL');
-  }
-
-  return db;
-}
-
-export function getDb(): Database.Database {
-  if (!defaultDb) {
-    defaultDb = createDb();
-  }
+  defaultDb = sql as unknown as AppDatabase;
   return defaultDb;
 }
 
 export function closeDb(): void {
-  if (defaultDb) {
-    defaultDb.close();
-    defaultDb = null;
-  }
+  // Neon HTTP queries do not keep a persistent socket pool open.
+  defaultDb = null;
 }

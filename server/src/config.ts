@@ -32,7 +32,7 @@ const envSchema = z.object({
   // Keep this configured model aligned with Groq's active model catalog.
   GROQ_MODEL: z.string().optional(),
   LLM_DEMO_CACHE: z.enum(['true', 'false']).default('false'),
-  DATABASE_PATH: z.string().optional(),
+  DATABASE_URL: z.string().url(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

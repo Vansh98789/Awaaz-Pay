@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import { parseIntent } from '../intent/parseIntent.js';
 import { regexFallback } from '../intent/fallback.js';
 import {
@@ -71,22 +71,20 @@ export interface ConverseResponse {
 }
 
 export async function processConversation(
-  db: Database.Database,
+  db: Database,
   sessionId: string,
   text: string,
   userId = 'user_meena',
   requestedLang?: 'hi' | 'en'
 ): Promise<ConverseResponse> {
   const session = getSession(sessionId, userId);
-  const user = getUserById(db, userId);
+  const user = await getUserById(db, userId);
 
   const lang: 'hi' | 'en' =
     requestedLang || session.lang || (user?.language === 'en' ? 'en' : 'hi');
 
-  const contactsList = listContacts(db, userId);
-  const merchantsList = (
-    db.prepare('SELECT name FROM merchants').all() as Array<{ name: string }>
-  ).map((m) => m.name);
+  const contactsList = await listContacts(db, userId);
+  const merchantsList = (await db.query<{ name: string }>('SELECT name FROM merchants ORDER BY name')).map((m) => m.name);
   const contactAliases = [
     ...contactsList.map((c) => c.alias),
     ...contactsList.map((c) => c.display_name),
@@ -124,7 +122,7 @@ export async function processConversation(
 
       if (confirmRes.status === 'completed') {
         if (session.invoiceId) {
-          updateInvoiceStatus(db, session.invoiceId, 'PAID');
+          await updateInvoiceStatus(db, session.invoiceId, 'PAID');
         }
         replyText = templates[lang].payment_success(
           session.pendingPayeeName || 'Payee',
@@ -178,7 +176,7 @@ export async function processConversation(
         ? `${session.pendingPayeeName || 'Yeh payee'} aapki regular payee list mein nahi hain. Unka Awaaz Pay recipient QR scan karein ya PayPal Sandbox email bolkar ya type karke dein.`
         : `${session.pendingPayeeName || 'This payee'} isn't in your regular payee list. Scan their Awaaz Pay recipient QR or say or enter their PayPal Sandbox email.`;
     } else {
-      const prep = preparePayment(db, {
+      const prep = await preparePayment(db, {
         userId,
         payee: emailMatch[0],
         amount: session.pendingAmount,
@@ -203,13 +201,9 @@ export async function processConversation(
     }
   } else if (session.state === 'awaiting_guardian_approval') {
     const approval = session.currentTransactionId
-      ? getApprovalByTransactionId(db, session.currentTransactionId)
+      ? await getApprovalByTransactionId(db, session.currentTransactionId)
       : null;
-    const guardian = db
-      .prepare<[string], { name: string }>(
-        'SELECT name FROM guardians WHERE user_id = ?'
-      )
-      .get(userId);
+    const guardian = (await db.query<{ name: string }>('SELECT name FROM guardians WHERE user_id = $1 ORDER BY id LIMIT 1', [userId]))[0];
     const guardianName = guardian?.name || 'Ramesh';
 
     if (approval?.status === 'approved') {
@@ -334,7 +328,7 @@ export async function processConversation(
       });
 
       if (risk === 'high') {
-        recordTransaction(db, {
+        await recordTransaction(db, {
           user_id: userId,
           type: 'send_money',
           amount: session.pendingAmount || 0,
@@ -348,7 +342,7 @@ export async function processConversation(
           paypal_ref: null,
         });
 
-        writeAudit(db, {
+        await writeAudit(db, {
           user_id: userId,
           kind: 'scam_payment_blocked',
           payload: JSON.stringify({
@@ -361,7 +355,7 @@ export async function processConversation(
           }),
         });
 
-        createNotification(db, {
+        await createNotification(db, {
           user_id: userId,
           kind: 'scam_alert',
           message: `Scam alert: Payment of $${Number(session.pendingAmount).toFixed(2)} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${signals.categories.join(', ') || 'instruction by caller'}).`,
@@ -380,7 +374,7 @@ export async function processConversation(
         replyText = templates[lang].scam_ask_knows_payee;
       } else {
         if (risk === 'medium') {
-          const prep = preparePayment(db, {
+          const prep = await preparePayment(db, {
             userId,
             payee: session.pendingPayeeRaw!,
             amount: session.pendingAmount!,
@@ -398,7 +392,7 @@ export async function processConversation(
             lang
           );
         } else {
-          const prep = preparePayment(db, {
+          const prep = await preparePayment(db, {
             userId,
             payee: session.pendingPayeeRaw!,
             amount: session.pendingAmount!,
@@ -438,7 +432,7 @@ export async function processConversation(
       });
 
       if (finalRisk === 'high') {
-        recordTransaction(db, {
+        await recordTransaction(db, {
           user_id: userId,
           type: 'send_money',
           amount: session.pendingAmount || 0,
@@ -452,7 +446,7 @@ export async function processConversation(
           paypal_ref: null,
         });
 
-        writeAudit(db, {
+        await writeAudit(db, {
           user_id: userId,
           kind: 'scam_payment_blocked',
           payload: JSON.stringify({
@@ -466,7 +460,7 @@ export async function processConversation(
           }),
         });
 
-        createNotification(db, {
+        await createNotification(db, {
           user_id: userId,
           kind: 'scam_alert',
           message: `Scam alert: Payment of $${Number(session.pendingAmount).toFixed(2)} to ${session.pendingPayeeName} was blocked. Reason: High scam risk detected (${finalSignals.categories.join(', ') || 'unverified payee with caller pressure'}).`,
@@ -486,7 +480,7 @@ export async function processConversation(
           ? 'Yeh vyakti aapki regular payee list mein nahi hain. Unka Awaaz Pay recipient QR scan karein ya PayPal Sandbox email bolkar ya type karke dein. Aap confirm karenge to family approval maangi jayegi.'
           : 'This person is not in your regular payee list. Scan their Awaaz Pay recipient QR or say or enter their PayPal Sandbox email. After you confirm the details, your family will receive the approval request.';
       } else if (finalRisk === 'medium') {
-        const prep = preparePayment(db, {
+        const prep = await preparePayment(db, {
           userId,
           payee: session.pendingPayeeRaw!,
           amount: session.pendingAmount!,
@@ -504,7 +498,7 @@ export async function processConversation(
           lang
         );
       } else {
-        const prep = preparePayment(db, {
+        const prep = await preparePayment(db, {
           userId,
           payee: session.pendingPayeeRaw!,
           amount: session.pendingAmount!,
@@ -540,12 +534,12 @@ export async function processConversation(
   } else {
     const parsedInvoiceId = parseInvoiceQr(text);
     const invoice = parsedInvoiceId
-      ? getInvoiceByPaypalId(db, parsedInvoiceId) ||
-        getInvoiceById(db, parsedInvoiceId)
+      ? await getInvoiceByPaypalId(db, parsedInvoiceId) ||
+        await getInvoiceById(db, parsedInvoiceId)
       : null;
 
     if (invoice) {
-      const prep = preparePayment(db, {
+      const prep = await preparePayment(db, {
         userId,
         payee: invoice.merchant_name,
         amount: invoice.amount,
@@ -603,7 +597,7 @@ export async function processConversation(
     const senderName = hindiSenderMatch?.[1] || engSenderMatch?.[1];
 
     if (senderName && !['kisi', 'kisko', 'sab'].includes(senderName.toLowerCase())) {
-      const res = getLastSenderAmount(db, userId, senderName);
+      const res = await getLastSenderAmount(db, userId, senderName);
       replyText = res.spokenText[lang];
     } else if (/\b(agla|next|aage)\b/i.test(text) && session.lastHistoryList && session.lastHistoryList.length > 0) {
       const list = session.lastHistoryList;
@@ -643,14 +637,14 @@ export async function processConversation(
           : 'I could not retrieve the PayPal Sandbox balance just now. Please try again shortly.';
       }
     } else if (intentResult.intent === 'read_history') {
-      const summary = getSevenDaySummary(db, userId);
+      const summary = await getSevenDaySummary(db, userId);
       updateSession(sessionId, {
         lastHistoryList: summary.transactions,
         historyIndex: 0,
       });
       replyText = summary.spokenText[lang];
     } else if (intentResult.intent === 'explain_payment') {
-      const exp = explainRecentPayment(db, userId);
+      const exp = await explainRecentPayment(db, userId);
       replyText = exp.spokenText[lang];
     } else if (isCompletingPayment && session.pendingAmount && !intentResult.recipient_alias && extractNewPayeeLabel(text)) {
       const newPayee = extractNewPayeeLabel(text)!;
@@ -685,7 +679,7 @@ export async function processConversation(
         try {
           const payee = statedPayee;
           const amount = intentResult.amount;
-          const resolvedPayee = resolvePayee(db, userId, payee);
+          const resolvedPayee = await resolvePayee(db, userId, payee);
 
           if (resolvedPayee.counterpartyType === 'new_personal' && !/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(payee)) {
             updateSession(sessionId, {
@@ -699,13 +693,10 @@ export async function processConversation(
             replyText = askForNewPayeeDetails(payee, lang);
           } else {
 
-          const blockCheck = db
-            .prepare<[string], { count: number }>(
-              'SELECT COUNT(*) AS count FROM blocklist WHERE LOWER(paypal_email) = ?'
-            )
-            .get(resolvedPayee.email.toLowerCase())?.count ?? 0;
+          const blockCheck = (await db.query<{ exists: boolean }>(
+            'SELECT EXISTS (SELECT 1 FROM blocklist WHERE LOWER(paypal_email) = $1) AS exists', [resolvedPayee.email.toLowerCase()]))[0]?.exists ?? false;
 
-          if (blockCheck > 0) {
+          if (blockCheck) {
             resetSession(sessionId);
             replyText = templates[lang].payment_blocked(
               'This payee is blocked for your safety.'
@@ -720,7 +711,7 @@ export async function processConversation(
           const initialSignals = detectScamSignals(text);
           const initialScamRisk = combineRisk(initialSignals);
 
-          const { context } = buildPaymentContext(
+          const { context } = await buildPaymentContext(
             db,
             user!,
             resolvedPayee,
@@ -758,7 +749,7 @@ export async function processConversation(
             replyText = templates[lang].scam_ask_told_to_pay;
           } else {
             const isEmailRecipient = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(payee);
-            const prep = preparePayment(db, {
+            const prep = await preparePayment(db, {
               userId,
               payee,
               amount,

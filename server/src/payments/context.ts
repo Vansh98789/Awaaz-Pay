@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import type {
   PaymentContext,
   PaymentRequest,
@@ -18,20 +18,17 @@ export interface ResolvedPayee {
   merchant?: Merchant;
 }
 
-export function resolvePayee(
-  db: Database.Database,
+export async function resolvePayee(
+  db: Database,
   userId: string,
   payeeQuery: string
-): ResolvedPayee {
+): Promise<ResolvedPayee> {
   const q = payeeQuery.trim().toLowerCase();
 
-  const contact = db
-    .prepare<[string, string, string, string], Contact>(
-      `SELECT * FROM contacts 
-       WHERE user_id = ? AND (LOWER(alias) = ? OR LOWER(display_name) = ? OR LOWER(paypal_email) = ?) 
-       LIMIT 1`
-    )
-    .get(userId, q, q, q);
+  const contact = (await db.query<Contact>(
+    `SELECT * FROM contacts WHERE user_id = $1
+     AND (LOWER(alias) = $2 OR LOWER(display_name) = $3 OR LOWER(paypal_email) = $4) LIMIT 1`,
+    [userId, q, q, q]))[0];
 
   if (contact) {
     return {
@@ -44,13 +41,8 @@ export function resolvePayee(
     };
   }
 
-  const merchant = db
-    .prepare<[string, string], Merchant>(
-      `SELECT * FROM merchants 
-       WHERE LOWER(name) = ? OR LOWER(paypal_email) = ? 
-       LIMIT 1`
-    )
-    .get(q, q);
+  const merchant = (await db.query<Merchant>(
+    'SELECT * FROM merchants WHERE LOWER(name) = $1 OR LOWER(paypal_email) = $2 LIMIT 1', [q, q]))[0];
 
   if (merchant) {
     return {
@@ -79,12 +71,12 @@ function calculateMedian(values: number[]): number | null {
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-export function buildPaymentContext(
-  db: Database.Database,
+export async function buildPaymentContext(
+  db: Database,
   user: User,
   payee: ResolvedPayee,
   scamRisk: ScamRiskLevel = 'low'
-): { context: PaymentContext; isBlocklisted: boolean } {
+): Promise<{ context: PaymentContext; isBlocklisted: boolean }> {
   let limits: UserPaymentLimits = {};
   try {
     limits = JSON.parse(user.limits);
@@ -92,23 +84,17 @@ export function buildPaymentContext(
     limits = {};
   }
 
-  const blocklisted = db
-    .prepare<[string], { count: number }>(
-      'SELECT COUNT(*) AS count FROM blocklist WHERE LOWER(paypal_email) = ?'
-    )
-    .get(payee.email.toLowerCase())?.count ?? 0;
-  const isBlocklisted = blocklisted > 0;
+  const blocked = (await db.query<{ exists: boolean }>(
+    'SELECT EXISTS (SELECT 1 FROM blocklist WHERE LOWER(paypal_email) = $1) AS exists', [payee.email.toLowerCase()]))[0];
+  const isBlocklisted = blocked?.exists ?? false;
 
   const now = new Date();
   const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
 
-  const todayTxList = db
-    .prepare<[string, string], { amount: number; currency: string; counterparty_id: string; counterparty_type: string; created_at: string }>(
-      `SELECT amount, currency, counterparty_id, counterparty_type, created_at
-       FROM transactions 
-       WHERE user_id = ? AND status IN ('completed', 'processing', 'confirmed', 'pending_confirmation') AND created_at >= ?`
-    )
-    .all(user.id, startOfDay);
+  const todayTxList = await db.query<{ amount: number; currency: string; counterparty_id: string; counterparty_type: string; created_at: string }>(
+    `SELECT amount::float8 AS amount, currency, counterparty_id, counterparty_type, created_at
+     FROM transactions WHERE user_id = $1 AND status IN ('completed', 'processing', 'confirmed', 'pending_confirmation') AND created_at >= $2`,
+    [user.id, startOfDay]);
 
   const todayTotalAmount = todayTxList.reduce(
     (sum, tx) => sum + (tx.currency === 'USD' ? tx.amount : tx.amount * 0.012),
@@ -134,20 +120,13 @@ export function buildPaymentContext(
   const todayNewPayeesCount = newPayeesToday.size;
 
   const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
-  const recentPayments = db
-    .prepare<[string, string], { created_at: string }>(
-      `SELECT created_at FROM transactions 
-       WHERE user_id = ? AND created_at >= ? 
-       ORDER BY created_at DESC`
-    )
-    .all(user.id, tenMinutesAgo);
+  const recentPayments = await db.query<{ created_at: string }>(
+    'SELECT created_at FROM transactions WHERE user_id = $1 AND created_at >= $2 ORDER BY created_at DESC',
+    [user.id, tenMinutesAgo]);
 
-  const pastAmounts = db
-    .prepare<[string], { amount: number; currency: string }>(
-      `SELECT amount, currency FROM transactions
-       WHERE user_id = ? AND status = 'completed'`
-    )
-    .all(user.id)
+  const pastAmounts = (await db.query<{ amount: number; currency: string }>(
+      `SELECT amount::float8 AS amount, currency FROM transactions
+       WHERE user_id = $1 AND status = 'completed'`, [user.id]))
     .map((r) => r.currency === 'USD' ? r.amount : r.amount * 0.012);
 
   const medianPastPaymentAmount = calculateMedian(pastAmounts);

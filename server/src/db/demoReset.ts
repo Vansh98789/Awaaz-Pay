@@ -1,6 +1,5 @@
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from './connection.js';
 import path from 'node:path';
-import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getDb } from './connection.js';
 import { runMigrations } from './schema.js';
@@ -19,24 +18,14 @@ import { buildSystemPrompt } from '../intent/systemPrompt.js';
 
 import { clearAllSessions } from '../conversation/session.js';
 
-export function resetAndSeedDemoDatabase(db: Database.Database) {
+export async function resetAndSeedDemoDatabase(db: Database) {
   // Ensure all tables exist first
-  runMigrations(db);
+  await runMigrations(db);
 
   // Clear all existing data in deterministic order
-  db.exec(`
-    DELETE FROM approvals;
-    DELETE FROM notifications;
-    DELETE FROM audit_events;
-    DELETE FROM wallet_ledger;
-    DELETE FROM transactions;
-    DELETE FROM invoices;
-    DELETE FROM contacts;
-    DELETE FROM guardians;
-    DELETE FROM passkeys;
-    DELETE FROM blocklist;
-    DELETE FROM users;
-  `);
+  for (const table of ['approvals', 'notifications', 'audit_events', 'wallet_ledger', 'transactions', 'invoices', 'contacts', 'guardians', 'passkeys', 'blocklist', 'users']) {
+    await db.query(`DELETE FROM ${table}`);
+  }
 
   clearAllSessions();
 
@@ -47,7 +36,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
   const nowIso = now.toISOString();
 
   // 1. User Meena
-  const user = upsertUser(db, {
+  const user = await upsertUser(db, {
     id: 'user_meena',
     name: 'Meena',
     language: 'hi',
@@ -60,7 +49,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
   });
 
   // 2. Guardian Ramesh
-  const guardian = upsertGuardian(db, {
+  const guardian = await upsertGuardian(db, {
     id: 'guardian_ramesh',
     user_id: user.id,
     name: 'Ramesh',
@@ -69,7 +58,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
   });
 
   // 3. Contacts
-  const bhaiya = upsertContact(db, {
+  const bhaiya = await upsertContact(db, {
     id: 'contact_bhaiya',
     user_id: user.id,
     alias: 'bhaiya',
@@ -80,7 +69,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
     activated_at: past48h,
   });
 
-  const sabziWala = upsertContact(db, {
+  const sabziWala = await upsertContact(db, {
     id: 'contact_sabzi_wala',
     user_id: user.id,
     alias: 'sabzi_wala',
@@ -91,7 +80,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
     activated_at: past48h,
   });
 
-  upsertContact(db, {
+  await upsertContact(db, {
     id: 'contact_doodh_wala',
     user_id: user.id,
     alias: 'doodh_wala',
@@ -103,7 +92,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
   });
 
   // 4. Demo Merchant Ravi Cabs
-  const merchant = upsertMerchant(db, {
+  const merchant = await upsertMerchant(db, {
     id: 'merchant_ravi_cabs',
     name: 'Ravi Cabs',
     paypal_email: 'ravi-cabs-sandbox@example.com',
@@ -111,7 +100,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
   });
 
   // Pre-seed demo invoice for QR scanning
-  createInvoiceRecord(db, {
+  await createInvoiceRecord(db, {
     id: 'inv_demo_ravi_250',
     merchant_id: merchant.id,
     amount: 250,
@@ -122,7 +111,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
 
   // 5. Wallet Ledger & History
   // Initial deposit 4 days ago
-  addLedgerEntry(db, {
+  await addLedgerEntry(db, {
     user_id: user.id,
     delta: 2500,
     reason: 'Ramesh funding',
@@ -131,7 +120,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
   });
 
   // Sabzi wala payment 2 days ago
-  recordTransaction(db, {
+  await recordTransaction(db, {
     user_id: user.id,
     type: 'send',
     amount: 2.40,
@@ -144,7 +133,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
     status: 'completed',
     created_at: past2d,
   });
-  addLedgerEntry(db, {
+  await addLedgerEntry(db, {
     user_id: user.id,
     delta: -200,
     reason: 'Payment to Sabzi wala',
@@ -152,7 +141,7 @@ export function resetAndSeedDemoDatabase(db: Database.Database) {
     created_at: past2d,
   });
 
-  const finalBalance = getBalance(db, user.id);
+  const finalBalance = await getBalance(db, user.id);
 
   // 6. Pre-seed LLM Demo Cache for 100% offline & instantaneous demo experience
   seedLlmCache();
@@ -361,7 +350,7 @@ const isDirectRun =
 if (isDirectRun) {
   try {
     const db = getDb();
-    const result = resetAndSeedDemoDatabase(db);
+    const result = await resetAndSeedDemoDatabase(db);
     console.log('[Demo Reset] Database reset & demo state seeded successfully:');
     console.log(`  - User: ${result.userId} (Meena)`);
     console.log(`  - Guardian: ${result.guardianId} (Ramesh)`);

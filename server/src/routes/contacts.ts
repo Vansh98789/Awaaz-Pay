@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import crypto from 'node:crypto';
 import {
   listContacts,
@@ -14,11 +14,11 @@ import {
 } from '../db/repository.js';
 import type { ContactStatus } from '../db/types.js';
 
-export function createContactsRouter(db: Database.Database): Router {
+export function createContactsRouter(db: Database): Router {
   const router = Router();
 
   // QR supplied recipient details are never promoted directly to trusted status.
-  router.post('/scan', (req: Request, res: Response) => {
+  router.post('/scan', async (req: Request, res: Response) => {
     try {
       const userId = req.body.userId || req.user?.id || 'user_meena';
       const displayName = typeof req.body.displayName === 'string' ? req.body.displayName.trim() : '';
@@ -28,16 +28,14 @@ export function createContactsRouter(db: Database.Database): Router {
         return;
       }
 
-      const existing = db.prepare<[string, string], import('../db/types.js').Contact>(
-        'SELECT * FROM contacts WHERE user_id = ? AND LOWER(paypal_email) = LOWER(?) LIMIT 1'
-      ).get(userId, paypalEmail);
+      const existing = (await db.query<import('../db/types.js').Contact>(
+        'SELECT * FROM contacts WHERE user_id = $1 AND LOWER(paypal_email) = LOWER($2) LIMIT 1', [userId, paypalEmail]))[0];
       if (existing) {
         res.status(200).json({ contact: existing, existing: true, inCoolingOff: existing.status === 'cooling_off' });
         return;
       }
-      const sameName = db.prepare<[string, string], { id: string }>(
-        'SELECT id FROM contacts WHERE user_id = ? AND LOWER(display_name) = LOWER(?) LIMIT 1'
-      ).get(userId, displayName);
+      const sameName = (await db.query<{ id: string }>(
+        'SELECT id FROM contacts WHERE user_id = $1 AND LOWER(display_name) = LOWER($2) LIMIT 1', [userId, displayName]))[0];
       if (sameName) {
         res.status(409).json({ error: 'A contact already uses that name. Ask a helper to add a unique spoken nickname.' });
         return;
@@ -48,7 +46,7 @@ export function createContactsRouter(db: Database.Database): Router {
       const coolingHours = Number.isFinite(coolingHoursRaw) ? Math.max(1, Math.min(coolingHoursRaw, 168)) : 24;
       const activatedAt = new Date(now.getTime() + coolingHours * 60 * 60 * 1000).toISOString();
       const alias = displayName;
-      const contact = upsertContact(db, {
+      const contact = await upsertContact(db, {
         id: `contact_${crypto.randomUUID().slice(0, 8)}`,
         user_id: userId,
         alias,
@@ -59,13 +57,13 @@ export function createContactsRouter(db: Database.Database): Router {
         activated_at: activatedAt,
       });
 
-      createNotification(db, {
+      await createNotification(db, {
         user_id: userId,
         kind: 'contact_added',
         message: `New recipient QR scanned: ${displayName} (${paypalEmail}). Held for ${coolingHours} hours.`,
         spoken_text: `Naya payee QR se joda gaya: ${displayName}. Suraksha ke liye cooling-off period lagu hai.`,
       });
-      writeAudit(db, {
+      await writeAudit(db, {
         user_id: userId,
         kind: 'recipient_qr_scanned',
         payload: JSON.stringify({ contactId: contact.id, displayName, paypalEmail, coolingHours }),
@@ -77,10 +75,10 @@ export function createContactsRouter(db: Database.Database): Router {
   });
 
   // 1. List contacts
-  router.get('/', (req: Request, res: Response) => {
+  router.get('/', async (req: Request, res: Response) => {
     try {
       const userId = (req.query.userId as string) || req.user?.id || 'user_meena';
-      const contacts = listContacts(db, userId);
+      const contacts = await listContacts(db, userId);
       res.status(200).json({ contacts });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -88,7 +86,7 @@ export function createContactsRouter(db: Database.Database): Router {
   });
 
   // 2. Add contact (with cooling-off period)
-  router.post('/', (req: Request, res: Response) => {
+  router.post('/', async (req: Request, res: Response) => {
     try {
       const userId = req.body.userId || req.user?.id || 'user_meena';
       const { alias, displayName, paypalEmail, addedBy = 'guardian_ramesh' } = req.body;
@@ -109,7 +107,7 @@ export function createContactsRouter(db: Database.Database): Router {
 
       const contactId = `contact_${crypto.randomUUID().slice(0, 8)}`;
 
-      const contact = upsertContact(db, {
+      const contact = await upsertContact(db, {
         id: contactId,
         user_id: userId,
         alias: alias.trim(),
@@ -121,14 +119,14 @@ export function createContactsRouter(db: Database.Database): Router {
       });
 
       // Notify guardian
-      createNotification(db, {
+      await createNotification(db, {
         user_id: userId,
         kind: 'contact_added',
         message: `New contact added: ${displayName} (${alias}). Status: ${status}. Active at: ${activatedAt}.`,
         spoken_text: `Naya contact joda gaya: ${displayName}.`,
       });
 
-      writeAudit(db, {
+      await writeAudit(db, {
         user_id: userId,
         kind: 'contact_added',
         payload: JSON.stringify({
@@ -151,14 +149,14 @@ export function createContactsRouter(db: Database.Database): Router {
   });
 
   // 3. Emergency: Instant activation by guardian
-  router.post('/:id/activate', (req: Request, res: Response) => {
+  router.post('/:id/activate', async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       if (!id) {
         res.status(400).json({ error: 'ID is required' });
         return;
       }
-      const contact = getContactById(db, id);
+      const contact = await getContactById(db, id);
 
       if (!contact) {
         res.status(404).json({ error: 'Contact not found' });
@@ -166,13 +164,13 @@ export function createContactsRouter(db: Database.Database): Router {
       }
 
       const now = new Date().toISOString();
-      const updated = upsertContact(db, {
+      const updated = await upsertContact(db, {
         ...contact,
         status: 'active',
         activated_at: now,
       });
 
-      writeAudit(db, {
+      await writeAudit(db, {
         user_id: contact.user_id,
         kind: 'emergency_contact_activated',
         payload: JSON.stringify({ contactId: id, activatedAt: now }),
@@ -185,14 +183,14 @@ export function createContactsRouter(db: Database.Database): Router {
   });
 
   // 4. Block contact during cooling off
-  router.post('/:id/block', (req: Request, res: Response) => {
+  router.post('/:id/block', async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       if (!id) {
         res.status(400).json({ error: 'ID is required' });
         return;
       }
-      const contact = getContactById(db, id);
+      const contact = await getContactById(db, id);
 
       if (!contact) {
         res.status(404).json({ error: 'Contact not found' });
@@ -200,14 +198,13 @@ export function createContactsRouter(db: Database.Database): Router {
       }
 
       // Add to blocklist
-      db.prepare(`
-        INSERT OR REPLACE INTO blocklist (id, paypal_email, reason)
-        VALUES (?, ?, ?)
-      `).run(`blk_${Date.now()}`, contact.paypal_email.toLowerCase(), 'Blocked during cooling-off by guardian');
+      await db.query(`INSERT INTO blocklist (id, paypal_email, reason) VALUES ($1, $2, $3)
+        ON CONFLICT (paypal_email) DO UPDATE SET reason = EXCLUDED.reason`,
+      [`blk_${Date.now()}`, contact.paypal_email.toLowerCase(), 'Blocked during cooling-off by guardian']);
 
-      deleteContact(db, id);
+      await deleteContact(db, id);
 
-      writeAudit(db, {
+      await writeAudit(db, {
         user_id: contact.user_id,
         kind: 'contact_blocked_during_cooling_off',
         payload: JSON.stringify({ contactId: id, email: contact.paypal_email }),
@@ -220,14 +217,14 @@ export function createContactsRouter(db: Database.Database): Router {
   });
 
   // 5. Delete contact
-  router.delete('/:id', (req: Request, res: Response) => {
+  router.delete('/:id', async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       if (!id) {
         res.status(400).json({ error: 'ID is required' });
         return;
       }
-      deleteContact(db, id);
+      await deleteContact(db, id);
       res.status(200).json({ success: true });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -237,11 +234,11 @@ export function createContactsRouter(db: Database.Database): Router {
   return router;
 }
 
-export function createOnboardingRouter(db: Database.Database): Router {
+export function createOnboardingRouter(db: Database): Router {
   const router = Router();
 
   // Complete assisted onboarding wizard
-  router.post('/complete', (req: Request, res: Response) => {
+  router.post('/complete', async (req: Request, res: Response) => {
     try {
       const {
         userId = 'user_meena',
@@ -260,7 +257,7 @@ export function createOnboardingRouter(db: Database.Database): Router {
         contacts = [],
       } = req.body;
 
-      const user = upsertUser(db, {
+      const user = await upsertUser(db, {
         id: userId,
         name,
         language,
@@ -271,7 +268,7 @@ export function createOnboardingRouter(db: Database.Database): Router {
         created_at: new Date().toISOString(),
       });
 
-      const guardianRecord = upsertGuardian(db, {
+      const guardianRecord = await upsertGuardian(db, {
         id: `guardian_${Date.now()}`,
         user_id: userId,
         name: guardian.name,
@@ -291,7 +288,7 @@ export function createOnboardingRouter(db: Database.Database): Router {
           ? now.toISOString()
           : new Date(now.getTime() + coolingHours * 3600 * 1000).toISOString();
 
-        const contact = upsertContact(db, {
+        const contact = await upsertContact(db, {
           id: `contact_${crypto.randomUUID().slice(0, 8)}`,
           user_id: userId,
           alias: c.alias,
@@ -304,7 +301,7 @@ export function createOnboardingRouter(db: Database.Database): Router {
         createdContacts.push(contact);
       }
 
-      writeAudit(db, {
+      await writeAudit(db, {
         user_id: userId,
         kind: 'onboarding_completed',
         payload: JSON.stringify({ userId, name, language, limits, contactsCount: contacts.length }),

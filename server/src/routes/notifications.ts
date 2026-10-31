@@ -1,41 +1,41 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import {
   getPendingNotifications,
   markNotificationDelivered,
   markNotificationsDelivered,
 } from '../db/repository.js';
 
-export function createNotificationsRouter(db: Database.Database): Router {
+export function createNotificationsRouter(db: Database): Router {
   const router = Router();
 
-  router.get('/pending', (req: Request, res: Response) => {
+  router.get('/pending', async (req: Request, res: Response) => {
     try {
       const userId = (req.query.userId as string) || 'user_meena';
-      const notifications = getPendingNotifications(db, userId);
+      const notifications = await getPendingNotifications(db, userId);
       res.status(200).json({ notifications });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  router.post('/:id/delivered', (req: Request, res: Response) => {
+  router.post('/:id/delivered', async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-      markNotificationDelivered(db, id);
+      await markNotificationDelivered(db, id);
       res.status(200).json({ success: true, id });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  router.post('/mark-delivered', (req: Request, res: Response) => {
+  router.post('/mark-delivered', async (req: Request, res: Response) => {
     try {
       const { id, ids } = req.body;
       if (id) {
-        markNotificationDelivered(db, id);
+        await markNotificationDelivered(db, id);
       } else if (Array.isArray(ids)) {
-        markNotificationsDelivered(db, ids);
+        await markNotificationsDelivered(db, ids);
       }
       res.status(200).json({ success: true });
     } catch (err) {

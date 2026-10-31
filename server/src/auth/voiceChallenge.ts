@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import { writeAudit } from '../db/repository.js';
 import { normalizeText } from '../safety/normalize.js';
 
@@ -130,13 +130,13 @@ export interface VoiceChallengeVerificationResult {
  * Verifies the voice challenge transcript.
  * Note: If verification fails, it adds a risk flag and audit event, but DOES NOT lock the user.
  */
-export function verifyVoiceChallenge(
-  db: Database.Database,
+export async function verifyVoiceChallenge(
+  db: Database,
   userId: string,
   challengeId: string,
   transcript: string,
   threshold = 0.55
-): VoiceChallengeVerificationResult {
+): Promise<VoiceChallengeVerificationResult> {
   const challenge = activeChallenges.get(challengeId);
   const expectedPhrase = challenge ? challenge.phrase : VOICE_CHALLENGE_PHRASES[0];
 
@@ -144,7 +144,7 @@ export function verifyVoiceChallenge(
   const passed = score >= threshold;
 
   // Log audit event as a risk signal
-  writeAudit(db, {
+  await writeAudit(db, {
     user_id: userId,
     kind: passed ? 'voice_challenge_passed' : 'voice_challenge_failed',
     payload: JSON.stringify({

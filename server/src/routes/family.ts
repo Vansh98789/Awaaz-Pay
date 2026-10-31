@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type Database from 'better-sqlite3';
+import type { AppDatabase as Database } from '../db/connection.js';
 import crypto from 'node:crypto';
 import { createOrder, captureOrder, getPayPalBalances, PayPalError } from '../paypal/index.js';
 import {
@@ -18,14 +18,14 @@ import { config } from '../config.js';
 import { clearFamilySession, hasFamilySession, issueFamilySession, requireFamilyAuth, verifyFamilyCredentials } from '../auth/familyAuth.js';
 import { requireAuth } from '../auth/middleware.js';
 
-export function createFamilyRouter(db: Database.Database): Router {
+export function createFamilyRouter(db: Database): Router {
   const router = Router();
 
-  router.get('/session', (req: Request, res: Response) => {
+  router.get('/session', async (req: Request, res: Response) => {
     res.status(200).json({ authenticated: hasFamilySession(req) });
   });
 
-  router.post('/login', (req: Request, res: Response) => {
+  router.post('/login', async (req: Request, res: Response) => {
     if (!config.FAMILY_DASHBOARD_EMAIL || !config.FAMILY_DASHBOARD_PASSWORD) {
       res.status(503).json({ error: 'Family portal login is not configured. Set FAMILY_DASHBOARD_EMAIL and FAMILY_DASHBOARD_PASSWORD.' });
       return;
@@ -38,7 +38,7 @@ export function createFamilyRouter(db: Database.Database): Router {
     res.status(200).json({ success: true });
   });
 
-  router.post('/logout', (req: Request, res: Response) => {
+  router.post('/logout', async (req: Request, res: Response) => {
     clearFamilySession(req, res);
     res.status(200).json({ success: true });
   });
@@ -74,9 +74,8 @@ export function createFamilyRouter(db: Database.Database): Router {
   router.get('/wallet-activity', requireAuth, async (req: Request, res: Response) => {
     try {
       const uid = req.user?.id || 'user_meena';
-      const inFlight = db.prepare<[string], { id: string }>(
-        "SELECT id FROM transactions WHERE user_id = ? AND status = 'processing' AND paypal_ref IS NOT NULL"
-      ).all(uid);
+      const inFlight = await db.query<{ id: string }>(
+        "SELECT id FROM transactions WHERE user_id = $1 AND status = 'processing' AND paypal_ref IS NOT NULL", [uid]);
       const paypalStatusByTransaction = new Map<string, string>();
       await Promise.all(inFlight.map(async ({ id }) => {
         const refreshed = await refreshPayoutStatus(db, id);
@@ -84,18 +83,14 @@ export function createFamilyRouter(db: Database.Database): Router {
       }));
 
       // Re-read after status refresh so the activity list reflects any completion/failure found above.
-      const rows = db.prepare<[string], import('../db/types.js').Transaction & { approval_status: string | null }>(
-        `SELECT t.*,
+      const rows = await db.query<import('../db/types.js').Transaction & { approval_status: string | null; payee_name: string | null }>(
+        `SELECT t.*, t.amount::float8 AS amount, COALESCE(c.display_name, m.name) AS payee_name,
           (SELECT a.status FROM approvals a WHERE a.transaction_id = t.id ORDER BY a.created_at DESC LIMIT 1) AS approval_status
-         FROM transactions t WHERE t.user_id = ? ORDER BY t.created_at DESC`
-      ).all(uid);
+         FROM transactions t LEFT JOIN contacts c ON t.counterparty_type = 'contact' AND c.id = t.counterparty_id
+         LEFT JOIN merchants m ON t.counterparty_type = 'merchant' AND m.id = t.counterparty_id
+         WHERE t.user_id = $1 ORDER BY t.created_at DESC`, [uid]);
       const transactions = rows.map((tx) => {
-        let counterparty = tx.counterparty_id;
-        if (tx.counterparty_type === 'contact') {
-          counterparty = db.prepare<[string], { display_name: string }>('SELECT display_name FROM contacts WHERE id = ?').get(tx.counterparty_id)?.display_name || counterparty;
-        } else if (tx.counterparty_type === 'merchant') {
-          counterparty = db.prepare<[string], { name: string }>('SELECT name FROM merchants WHERE id = ?').get(tx.counterparty_id)?.name || counterparty;
-        }
+        const counterparty = tx.payee_name || tx.counterparty_id;
         return {
           id: tx.id,
           time: tx.created_at,
@@ -119,7 +114,7 @@ export function createFamilyRouter(db: Database.Database): Router {
   // This intentionally does not honor DEMO_AUTH_BYPASS.
   router.use(requireFamilyAuth);
 
-  router.post('/contacts', (req: Request, res: Response) => {
+  router.post('/contacts', async (req: Request, res: Response) => {
     try {
       const userId = 'user_meena';
       const displayName = typeof req.body.displayName === 'string' ? req.body.displayName.trim() : '';
@@ -134,11 +129,11 @@ export function createFamilyRouter(db: Database.Database): Router {
         return;
       }
 
-      const duplicate = db.prepare<[string, string, string, string], { id: string }>(`
-        SELECT id FROM contacts WHERE user_id = ? AND (
-          LOWER(paypal_email) = LOWER(?) OR LOWER(alias) = LOWER(?) OR LOWER(display_name) = LOWER(?)
+      const duplicate = (await db.query<{ id: string }>(`
+        SELECT id FROM contacts WHERE user_id = $1 AND (
+          LOWER(paypal_email) = LOWER($2) OR LOWER(alias) = LOWER($3) OR LOWER(display_name) = LOWER($4)
         ) LIMIT 1
-      `).get(userId, paypalEmail, alias, displayName);
+      `, [userId, paypalEmail, alias, displayName]))[0];
       if (duplicate) {
         res.status(409).json({ error: 'A saved payee already uses that email, name, or nickname.' });
         return;
@@ -152,10 +147,9 @@ export function createFamilyRouter(db: Database.Database): Router {
       const activatedAt = skipCooling
         ? now.toISOString()
         : new Date(now.getTime() + coolingHours * 60 * 60 * 1000).toISOString();
-      const guardianId = db.prepare<[string], { id: string }>(
-        'SELECT id FROM guardians WHERE user_id = ? ORDER BY id LIMIT 1'
-      ).get(userId)?.id || 'guardian_family_dashboard';
-      const contact = upsertContact(db, {
+      const guardianId = (await db.query<{ id: string }>(
+        'SELECT id FROM guardians WHERE user_id = $1 ORDER BY id LIMIT 1', [userId]))[0]?.id || 'guardian_family_dashboard';
+      const contact = await upsertContact(db, {
         id: `contact_${crypto.randomUUID().slice(0, 8)}`,
         user_id: userId,
         alias,
@@ -166,13 +160,13 @@ export function createFamilyRouter(db: Database.Database): Router {
         activated_at: activatedAt,
       });
 
-      createNotification(db, {
+      await createNotification(db, {
         user_id: userId,
         kind: 'contact_added',
         message: `Family added ${displayName} (${paypalEmail}) to regular payees. Status: ${status}.`,
         spoken_text: `Aapki family ne ${displayName} ko regular payee list mein joda hai.`,
       });
-      writeAudit(db, {
+      await writeAudit(db, {
         user_id: userId,
         kind: 'family_contact_added',
         payload: JSON.stringify({ contactId: contact.id, displayName, alias, paypalEmail, status, activatedAt }),
@@ -215,17 +209,14 @@ export function createFamilyRouter(db: Database.Database): Router {
   router.get('/dashboard', async (_req: Request, res: Response) => {
     try {
       const uid = 'user_meena';
-      const user = getUserById(db, uid);
+      const user = await getUserById(db, uid);
       if (!user) {
         res.status(404).json({ error: 'User not found' });
         return;
       }
 
-      const processingTransactions = db
-        .prepare<[string], { id: string }>(
-          "SELECT id FROM transactions WHERE user_id = ? AND status = 'processing' AND paypal_ref IS NOT NULL"
-        )
-        .all(uid);
+      const processingTransactions = await db.query<{ id: string }>(
+        "SELECT id FROM transactions WHERE user_id = $1 AND status = 'processing' AND paypal_ref IS NOT NULL", [uid]);
       const paypalStatusByTransaction = new Map<string, string>();
       await Promise.all(processingTransactions.map(async (tx) => {
         const refreshed = await refreshPayoutStatus(db, tx.id);
@@ -245,26 +236,11 @@ export function createFamilyRouter(db: Database.Database): Router {
       limits.daily_total = Math.min(Number(limits.daily_total) || 5000, 5000);
 
       // 1. Fetch all transactions
-      const txRows = db
-        .prepare<[string], import('../db/types.js').Transaction>(
-          'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC'
-        )
-        .all(uid);
-
-      const formatCounterparty = (type: string, id: string) => {
-        if (type === 'contact') {
-          const c = db
-            .prepare<[string], { display_name: string }>('SELECT display_name FROM contacts WHERE id = ?')
-            .get(id);
-          if (c) return c.display_name;
-        } else if (type === 'merchant') {
-          const m = db
-            .prepare<[string], { name: string }>('SELECT name FROM merchants WHERE id = ?')
-            .get(id);
-          if (m) return m.name;
-        }
-        return id;
-      };
+      const txRows = await db.query<import('../db/types.js').Transaction & { payee_name: string | null }>(
+        `SELECT t.*, t.amount::float8 AS amount, COALESCE(c.display_name, m.name) AS payee_name
+         FROM transactions t LEFT JOIN contacts c ON t.counterparty_type = 'contact' AND c.id = t.counterparty_id
+         LEFT JOIN merchants m ON t.counterparty_type = 'merchant' AND m.id = t.counterparty_id
+         WHERE t.user_id = $1 ORDER BY t.created_at DESC`, [uid]);
 
       const formattedTx = txRows.map((tx) => {
         const isFlagged =
@@ -277,7 +253,7 @@ export function createFamilyRouter(db: Database.Database): Router {
           id: tx.id,
           time: tx.created_at,
           direction: 'OUT',
-          counterparty: formatCounterparty(tx.counterparty_type, tx.counterparty_id),
+          counterparty: tx.payee_name || tx.counterparty_id,
           counterpartyType: tx.counterparty_type,
           amount: tx.amount,
           currency: tx.currency,
@@ -297,21 +273,19 @@ export function createFamilyRouter(db: Database.Database): Router {
       );
 
       // 3. Pending approvals list
-      const pendingRows = db
-        .prepare<[string], import('../db/types.js').Approval & { amount: number; counterparty_id: string; counterparty_type: string }>(`
-          SELECT a.*, t.amount, t.counterparty_id, t.counterparty_type
-          FROM approvals a
-          JOIN transactions t ON a.transaction_id = t.id
-          WHERE t.user_id = ? AND a.status = 'pending'
-          ORDER BY a.created_at DESC
-        `)
-        .all(uid);
+      const pendingRows = await db.query<import('../db/types.js').Approval & { amount: number; counterparty_id: string; counterparty_type: string; payee_name: string | null }>(`
+          SELECT a.*, t.amount::float8 AS amount, t.counterparty_id, t.counterparty_type, COALESCE(c.display_name, m.name) AS payee_name
+          FROM approvals a JOIN transactions t ON a.transaction_id = t.id
+          LEFT JOIN contacts c ON t.counterparty_type = 'contact' AND c.id = t.counterparty_id
+          LEFT JOIN merchants m ON t.counterparty_type = 'merchant' AND m.id = t.counterparty_id
+          WHERE t.user_id = $1 AND a.status = 'pending' ORDER BY a.created_at DESC
+        `, [uid]);
 
       const pendingApprovals = pendingRows.map((p) => ({
         id: p.id,
         token: p.token,
         amount: p.amount,
-        payee: formatCounterparty(p.counterparty_type, p.counterparty_id),
+        payee: p.payee_name || p.counterparty_id,
         createdAt: p.created_at,
         expiresAt: p.expires_at,
         url: `/approve/${p.token}`,
@@ -321,7 +295,7 @@ export function createFamilyRouter(db: Database.Database): Router {
         success: true,
         userName: user.name,
         limits,
-        contacts: listContacts(db, uid),
+        contacts: await listContacts(db, uid),
         transactions: allActivity,
         pendingApprovals,
       });
@@ -339,7 +313,7 @@ export function createFamilyRouter(db: Database.Database): Router {
         return;
       }
 
-      const user = getUserById(db, userId);
+      const user = await getUserById(db, userId);
       const description = `Family wallet funding for ${user?.name ?? 'user'}`;
       const idempotencyKey =
         (req.headers['paypal-request-id'] as string) || `fund-${Date.now()}`;
@@ -382,8 +356,8 @@ export function createFamilyRouter(db: Database.Database): Router {
           : req.body.amount || 0;
         const ref = `paypal_capture_${captureId}`;
 
-        if (!hasLedgerRef(db, ref)) {
-          addLedgerEntry(db, {
+        if (!await hasLedgerRef(db, ref)) {
+          await addLedgerEntry(db, {
             user_id: userId,
             delta: amount,
             reason: `Family funding (${senderName})`,
@@ -393,14 +367,14 @@ export function createFamilyRouter(db: Database.Database): Router {
           const currency = captureDetails?.amount?.currency_code || 'USD';
           const spokenText = formatFundingNotificationHindi(senderName, amount, currency);
 
-          createNotification(db, {
+          await createNotification(db, {
             user_id: userId,
             kind: 'received_money',
             message: `Received ${amount} from ${senderName}`,
             spoken_text: spokenText,
           });
 
-          writeAudit(db, {
+          await writeAudit(db, {
             user_id: userId,
             kind: 'family_fund_captured',
             payload: JSON.stringify({ orderId, captureId, amount, currency }),
@@ -430,11 +404,11 @@ export function createFamilyRouter(db: Database.Database): Router {
     }
   });
 
-  router.post('/emergency-limit', (req: Request, res: Response) => {
+  router.post('/emergency-limit', async (req: Request, res: Response) => {
     try {
       const { additionalDailyLimit = 5000, perPaymentLimit = 5000 } = req.body;
       const userId = 'user_meena';
-      const user = getUserById(db, userId);
+      const user = await getUserById(db, userId);
       if (!user) {
         res.status(404).json({ error: 'User not found' });
         return;
@@ -450,16 +424,16 @@ export function createFamilyRouter(db: Database.Database): Router {
       limits.daily_total = Math.min(5000, limits.daily_total + Number(additionalDailyLimit));
       limits.per_transaction_new_payee = Math.max(limits.per_transaction_new_payee, Number(perPaymentLimit));
 
-      db.prepare('UPDATE users SET limits = ? WHERE id = ?').run(JSON.stringify(limits), userId);
+      await db.query('UPDATE users SET limits = $1::jsonb WHERE id = $2', [JSON.stringify(limits), userId]);
 
-      createNotification(db, {
+      await createNotification(db, {
         user_id: userId,
         kind: 'emergency_limit_granted',
         message: `Emergency limit is now $${limits.daily_total} per day.`,
         spoken_text: `Aapki daily spending limit ab ${limits.daily_total} US dollars hai.`,
       });
 
-      writeAudit(db, {
+      await writeAudit(db, {
         user_id: userId,
         kind: 'emergency_limit_granted',
         payload: JSON.stringify({ userId, additionalDailyLimit, limits }),
