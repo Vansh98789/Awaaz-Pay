@@ -2,6 +2,7 @@ import { neon, type NeonQueryFunction } from '@neondatabase/serverless';
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type Database from 'better-sqlite3';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,12 +84,49 @@ export async function initNeonDb(): Promise<boolean> {
       );
     `;
 
+    // A lossless mirror of every SQLite row. Keeping each source row as JSONB
+    // lets the mirror preserve SQLite's exact columns as the app schema grows.
+    await sql`
+      CREATE TABLE IF NOT EXISTS sqlite_mirror (
+        table_name TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        data JSONB NOT NULL,
+        synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (table_name, record_id)
+      );
+    `;
+
     console.log('[Neon DB] Schema synchronized successfully.');
     return true;
   } catch (err) {
     console.warn('[Neon DB] Failed to initialize Neon schema:', (err as Error).message);
     return false;
   }
+}
+
+const MIRRORED_TABLES = [
+  'users', 'guardians', 'contacts', 'merchants', 'invoices', 'transactions',
+  'approvals', 'notifications', 'audit_events', 'blocklist', 'wallet_ledger', 'passkeys',
+] as const;
+
+/** Atomically replace the Neon snapshot with every row currently in SQLite. */
+export async function syncSqliteSnapshotToNeon(db: Database.Database): Promise<void> {
+  const sql = getNeonSql();
+  if (!sql) return;
+
+  const snapshot = MIRRORED_TABLES.flatMap((table) => {
+    const rows = db.prepare(`SELECT * FROM ${table}`).all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({ table, id: String(row['id']), row }));
+  });
+
+  await sql.transaction((txn) => [
+    txn`DELETE FROM sqlite_mirror`,
+    ...snapshot.map(({ table, id, row }) => txn`
+      INSERT INTO sqlite_mirror (table_name, record_id, data)
+      VALUES (${table}, ${id}, ${JSON.stringify(row)}::jsonb)
+    `),
+  ]);
+  console.log(`[Neon DB] Mirrored ${snapshot.length} rows across ${MIRRORED_TABLES.length} tables.`);
 }
 
 export async function syncTransactionToNeon(tx: {
