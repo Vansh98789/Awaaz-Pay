@@ -46,6 +46,12 @@ interface FamilyContact {
   activated_at: string | null;
 }
 
+interface FamilyBlockedRecipient {
+  id: string;
+  paypal_email: string;
+  reason: string;
+}
+
 interface LimitsData {
   daily_total: number;
   per_transaction_new_payee: number;
@@ -75,6 +81,7 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
   const [transactions, setTransactions] = useState<ActivityRow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [contacts, setContacts] = useState<FamilyContact[]>([]);
+  const [blockedRecipients, setBlockedRecipients] = useState<FamilyBlockedRecipient[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState<string>('');
@@ -85,6 +92,12 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
   const [contactError, setContactError] = useState<string | null>(null);
   const [contactMessage, setContactMessage] = useState<string | null>(null);
   const [savingContact, setSavingContact] = useState(false);
+  const [blockedEmail, setBlockedEmail] = useState('');
+  const [blockReason, setBlockReason] = useState('');
+  const [blocklistError, setBlocklistError] = useState<string | null>(null);
+  const [blocklistMessage, setBlocklistMessage] = useState<string | null>(null);
+  const [savingBlock, setSavingBlock] = useState(false);
+  const [changingBlockId, setChangingBlockId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchDashboardData();
@@ -114,16 +127,20 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch('/api/family/dashboard?userId=user_meena');
-      if (!res.ok) {
+      const [res, blocklistResponse] = await Promise.all([
+        fetch('/api/family/dashboard?userId=user_meena', { credentials: 'include' }),
+        fetch('/api/family/blocklist', { credentials: 'include' }),
+      ]);
+      if (!res.ok || !blocklistResponse.ok) {
         throw new Error('Failed to load family dashboard');
       }
-      const data = await res.json();
+      const [data, blocklistData] = await Promise.all([res.json(), blocklistResponse.json()]);
       setUserName(data.userName || 'Meena');
       if (data.limits) setLimits({ ...data.limits, daily_total: Math.min(Number(data.limits.daily_total) || 5000, 5000) });
       setTransactions(data.transactions || []);
       setPendingApprovals(data.pendingApprovals || []);
       setContacts(data.contacts || []);
+      setBlockedRecipients(blocklistData.blocklist || []);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -161,6 +178,75 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
       setContactError((err as Error).message || 'Could not add this payee.');
     } finally {
       setSavingContact(false);
+    }
+  };
+
+  const blockRecipient = async (paypalEmail: string, reason: string) => {
+    const normalizedEmail = paypalEmail.trim().toLowerCase();
+    const response = await fetch('/api/family/blocklist', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paypalEmail: normalizedEmail, reason }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.blocked) throw new Error(data.error || 'Could not block this recipient.');
+    setBlockedRecipients((previous) => [
+      data.blocked,
+      ...previous.filter((item) => item.paypal_email.toLowerCase() !== normalizedEmail),
+    ].sort((a, b) => a.paypal_email.localeCompare(b.paypal_email)));
+    setContacts((previous) => previous.filter((contact) => contact.paypal_email.toLowerCase() !== normalizedEmail));
+    return data.blocked as FamilyBlockedRecipient;
+  };
+
+  const addBlockedRecipient = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    try {
+      setSavingBlock(true);
+      setBlocklistError(null);
+      const item = await blockRecipient(blockedEmail, blockReason);
+      setBlockedEmail('');
+      setBlockReason('');
+      setBlocklistMessage(`${item.paypal_email} is blocked. They were removed from regular payees if they were saved there.`);
+    } catch (err) {
+      setBlocklistError((err as Error).message || 'Could not block this recipient.');
+    } finally {
+      setSavingBlock(false);
+    }
+  };
+
+  const blockSavedContact = async (contact: FamilyContact) => {
+    try {
+      setChangingBlockId(contact.id);
+      setBlocklistError(null);
+      const item = await blockRecipient(contact.paypal_email, 'Blocked by family from regular payees');
+      setBlocklistMessage(`${item.paypal_email} is blocked and has been removed from regular payees.`);
+    } catch (err) {
+      setBlocklistError((err as Error).message || 'Could not block this recipient.');
+    } finally {
+      setChangingBlockId(null);
+    }
+  };
+
+  const unblockRecipient = async (item: FamilyBlockedRecipient) => {
+    const confirmed = window.confirm(`Unblock ${item.paypal_email}? Payments to this address may be attempted again if it is added as a payee.`);
+    if (!confirmed) return;
+    try {
+      setChangingBlockId(item.id);
+      setBlocklistError(null);
+      setBlocklistMessage(null);
+      const response = await fetch(`/api/family/blocklist/${encodeURIComponent(item.id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not unblock this recipient.');
+      setBlockedRecipients((previous) => previous.filter((entry) => entry.id !== item.id));
+      setBlocklistMessage(`${item.paypal_email} was removed from the blocklist. It was not added back to regular payees.`);
+    } catch (err) {
+      setBlocklistError((err as Error).message || 'Could not unblock this recipient.');
+    } finally {
+      setChangingBlockId(null);
     }
   };
 
@@ -511,20 +597,115 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
         {contacts.length > 0 ? (
           <ul aria-label="Saved regular payees" style={{ listStyle: 'none', marginTop: '1.5rem', padding: 0, borderTop: '1px solid var(--border, #D6D6D2)' }}>
             {contacts.map((contact) => (
-              <li key={contact.id} style={{ display: 'grid', gap: '0.25rem', padding: '1rem 0', borderBottom: '1px solid var(--border, #D6D6D2)' }}>
-                <strong style={{ fontSize: '1.15rem' }}>{contact.display_name} <span style={{ color: 'var(--text-muted, #4A4A4A)', fontWeight: 500 }}>({contact.alias})</span></strong>
-                <span>{contact.paypal_email}</span>
-                <span style={{ color: contact.status === 'active' ? 'var(--success, #0F7B3F)' : 'var(--warning, #8A5A00)', fontWeight: 700 }}>
-                  {contact.status === 'active'
-                    ? 'Ready to use'
-                    : `Safety hold until ${contact.activated_at ? new Date(contact.activated_at).toLocaleString() : 'later'}`}
-                </span>
+              <li key={contact.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', gap: '1rem', padding: '1rem 0', borderBottom: '1px solid var(--border, #D6D6D2)' }}>
+                <div style={{ display: 'grid', gap: '0.25rem', minWidth: 0 }}>
+                  <strong style={{ fontSize: '1.15rem' }}>{contact.display_name} <span style={{ color: 'var(--text-muted, #4A4A4A)', fontWeight: 500 }}>({contact.alias})</span></strong>
+                  <span style={{ overflowWrap: 'anywhere' }}>{contact.paypal_email}</span>
+                  <span style={{ color: contact.status === 'active' ? 'var(--success, #0F7B3F)' : 'var(--warning, #8A5A00)', fontWeight: 700 }}>
+                    {contact.status === 'active'
+                      ? 'Ready to use'
+                      : `Safety hold until ${contact.activated_at ? new Date(contact.activated_at).toLocaleString() : 'later'}`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void blockSavedContact(contact)}
+                  disabled={savingBlock || changingBlockId !== null}
+                  aria-label={`Block ${contact.display_name} and remove them from regular payees`}
+                  style={{ minHeight: '64px', padding: '0.65rem 1rem', border: '2px solid var(--danger)', borderRadius: 'var(--radius-pill, 999px)', background: 'var(--surface)', color: 'var(--danger)', font: 'inherit', fontWeight: 700, cursor: changingBlockId ? 'wait' : 'pointer' }}
+                >
+                  {changingBlockId === contact.id ? 'Blocking…' : 'Block'}
+                </button>
               </li>
             ))}
           </ul>
         ) : (
           <p style={{ marginTop: '1.5rem', color: 'var(--text-muted, #4A4A4A)' }}>No regular payees have been added yet.</p>
         )}
+      </section>
+
+      <section
+        aria-labelledby="blocklist-heading"
+        className="guardian-card"
+        style={{ margin: '2rem 0', padding: '1.25rem', color: 'var(--text)', background: 'var(--surface)', border: '2px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', boxShadow: '0 6px 20px rgba(0, 0, 0, 0.06)' }}
+      >
+        <h2 id="blocklist-heading" style={{ fontSize: '1.5rem', fontWeight: 750 }}>Blocked recipients</h2>
+        <p style={{ marginTop: '0.5rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          Blocked PayPal emails cannot be used for payments. Blocking a saved payee removes them from the regular payee list.
+        </p>
+
+        {blocklistError && <p role="alert" style={{ marginTop: '1rem', color: 'var(--danger)', fontWeight: 700 }}>{blocklistError}</p>}
+        {blocklistMessage && <p role="status" aria-live="polite" style={{ marginTop: '1rem', color: 'var(--success)', fontWeight: 700 }}>{blocklistMessage}</p>}
+
+        <form onSubmit={addBlockedRecipient} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 250px), 1fr))', alignItems: 'end', gap: '1rem', marginTop: '1.25rem' }}>
+          <div>
+            <label htmlFor="blocked-recipient-email" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 700 }}>PayPal email to block</label>
+            <input
+              id="blocked-recipient-email"
+              name="paypalEmail"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              required
+              maxLength={254}
+              value={blockedEmail}
+              onChange={(event) => setBlockedEmail(event.target.value)}
+              className="form-input"
+              placeholder="name@example.com"
+              style={{ minHeight: '64px', width: '100%', padding: '0.75rem 1rem', font: 'inherit' }}
+            />
+          </div>
+          <div>
+            <label htmlFor="block-reason" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 700 }}>Reason (optional)</label>
+            <input
+              id="block-reason"
+              name="reason"
+              maxLength={200}
+              value={blockReason}
+              onChange={(event) => setBlockReason(event.target.value)}
+              className="form-input"
+              placeholder="Why is this recipient blocked?"
+              style={{ minHeight: '64px', width: '100%', padding: '0.75rem 1rem', font: 'inherit' }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={savingBlock}
+            aria-busy={savingBlock}
+            style={{ minHeight: '64px', padding: '0.75rem 1rem', border: '2px solid var(--danger)', borderRadius: 'var(--radius-pill, 999px)', background: 'var(--danger)', color: 'var(--surface)', font: 'inherit', fontWeight: 750, cursor: savingBlock ? 'wait' : 'pointer' }}
+          >
+            {savingBlock ? 'Blocking recipient…' : 'Block recipient'}
+          </button>
+        </form>
+
+        {blockedRecipients.length ? (
+          <ul aria-label="Blocked PayPal recipients" style={{ listStyle: 'none', marginTop: '1.25rem', padding: 0, borderTop: '1px solid var(--border)' }}>
+            {blockedRecipients.map((item) => (
+              <li key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', gap: '1rem', padding: '1rem 0', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ display: 'grid', gap: '0.3rem', minWidth: 0 }}>
+                  <strong style={{ overflowWrap: 'anywhere' }}>{item.paypal_email}</strong>
+                  <span style={{ color: 'var(--text-muted)' }}>{item.reason}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void unblockRecipient(item)}
+                  disabled={changingBlockId !== null || savingBlock}
+                  aria-label={`Unblock ${item.paypal_email}`}
+                  style={{ minHeight: '64px', padding: '0.65rem 1rem', border: '2px solid var(--border)', borderRadius: 'var(--radius-pill, 999px)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', fontWeight: 700, cursor: changingBlockId ? 'wait' : 'pointer' }}
+                >
+                  {changingBlockId === item.id ? 'Unblocking…' : 'Unblock'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p style={{ marginTop: '1.25rem', color: 'var(--text-muted)' }}>No recipients are blocked.</p>
+        )}
+        <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.95rem' }}>
+          Unblocking only removes the block. To make someone a regular payee again, add them separately and complete the safety hold.
+        </p>
       </section>
 
       {/* Pending Approvals Action Banner */}

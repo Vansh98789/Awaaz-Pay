@@ -114,6 +114,68 @@ export function createFamilyRouter(db: Database): Router {
   // This intentionally does not honor DEMO_AUTH_BYPASS.
   router.use(requireFamilyAuth);
 
+  router.get('/blocklist', async (_req: Request, res: Response) => {
+    try {
+      const blocklist = await db.query<{ id: string; paypal_email: string; reason: string }>(
+        'SELECT id, paypal_email, reason FROM blocklist ORDER BY paypal_email ASC',
+      );
+      res.status(200).json({ blocklist });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/blocklist', async (req: Request, res: Response) => {
+    try {
+      const paypalEmail = typeof req.body.paypalEmail === 'string' ? req.body.paypalEmail.trim().toLowerCase() : '';
+      const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paypalEmail) || paypalEmail.length > 254) {
+        res.status(400).json({ error: 'Enter a valid PayPal email to block.' });
+        return;
+      }
+      if (reason.length > 200) {
+        res.status(400).json({ error: 'The reason must be 200 characters or fewer.' });
+        return;
+      }
+
+      const blockReason = reason || 'Blocked by family';
+      const id = `blk_${crypto.randomUUID()}`;
+      const blocked = (await db.query<{ id: string; paypal_email: string; reason: string }>(
+        `INSERT INTO blocklist (id, paypal_email, reason) VALUES ($1, $2, $3)
+         ON CONFLICT (paypal_email) DO UPDATE SET reason = EXCLUDED.reason
+         RETURNING id, paypal_email, reason`, [id, paypalEmail, blockReason]))[0];
+      await db.query('DELETE FROM contacts WHERE user_id = $1 AND LOWER(paypal_email) = $2', ['user_meena', paypalEmail]);
+      await writeAudit(db, {
+        user_id: 'user_meena',
+        kind: 'family_recipient_blocked',
+        payload: JSON.stringify({ paypalEmail, reason: blockReason }),
+      });
+      res.status(201).json({ blocked });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.delete('/blocklist/:id', async (req: Request, res: Response) => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const removed = (await db.query<{ paypal_email: string }>(
+        'DELETE FROM blocklist WHERE id = $1 RETURNING paypal_email', [id]))[0];
+      if (!removed) {
+        res.status(404).json({ error: 'Blocked recipient not found.' });
+        return;
+      }
+      await writeAudit(db, {
+        user_id: 'user_meena',
+        kind: 'family_recipient_unblocked',
+        payload: JSON.stringify({ paypalEmail: removed.paypal_email }),
+      });
+      res.status(200).json({ success: true, paypalEmail: removed.paypal_email });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   router.post('/contacts', async (req: Request, res: Response) => {
     try {
       const userId = 'user_meena';
