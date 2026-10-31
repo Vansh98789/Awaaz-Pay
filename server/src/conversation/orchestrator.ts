@@ -53,8 +53,8 @@ function extractNewPayeeLabel(text: string): string | null {
 
 function askForNewPayeeDetails(payee: string, lang: 'hi' | 'en'): string {
   return lang === 'hi'
-    ? `${payee} aapki known list mein nahi hain. Choose karein: recipient QR scan karein, ya PayPal Sandbox email se pay karein. Email bol sakte hain ya type kar sakte hain. Main payment se pehle naam aur amount dohraungi.`
-    : `${payee} is not in your known contacts. Choose: scan their recipient QR or pay by PayPal Sandbox email. You can say or type the email. I will read back the recipient and amount before any payment.`;
+    ? `${payee} aapki regular payee list mein nahi hain. Payment ke liye unka Awaaz Pay recipient QR scan karein ya PayPal Sandbox email bolkar ya type karke dein. Payment confirm karne se pehle main naam aur rakam dohraungi.`
+    : `${payee} isn't in your regular payee list. To pay them, scan their Awaaz Pay recipient QR or enter their PayPal Sandbox email. I will repeat the name and amount before asking you to confirm.`;
 }
 
 export interface ConverseResponse {
@@ -175,8 +175,8 @@ export async function processConversation(
     const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
     if (!emailMatch || !session.pendingAmount) {
       replyText = lang === 'hi'
-        ? 'Pehle payee ka QR scan karein ya uska PayPal Sandbox email boliye ya type karke submit karein.'
-        : 'Scan the recipient QR, or say or enter the recipient’s PayPal Sandbox email.';
+        ? `${session.pendingPayeeName || 'Yeh payee'} aapki regular payee list mein nahi hain. Unka Awaaz Pay recipient QR scan karein ya PayPal Sandbox email bolkar ya type karke dein.`
+        : `${session.pendingPayeeName || 'This payee'} isn't in your regular payee list. Scan their Awaaz Pay recipient QR or say or enter their PayPal Sandbox email.`;
     } else {
       const prep = preparePayment(db, {
         userId,
@@ -483,8 +483,8 @@ export async function processConversation(
           unclearAttempts: 0,
         });
         replyText = lang === 'hi'
-          ? 'Ab naye payee ka QR scan karein ya PayPal Sandbox email boliye ya type karein. Main naam aur email dohraunga; aapki haan ke baad family approval request jayegi.'
-          : 'Now scan the new recipient’s QR, or say or enter their PayPal Sandbox email. I will read back the name and email; after you confirm, your family will receive the approval request.';
+          ? 'Yeh vyakti aapki regular payee list mein nahi hain. Unka Awaaz Pay recipient QR scan karein ya PayPal Sandbox email bolkar ya type karke dein. Aap confirm karenge to family approval maangi jayegi.'
+          : 'This person is not in your regular payee list. Scan their Awaaz Pay recipient QR or say or enter their PayPal Sandbox email. After you confirm the details, your family will receive the approval request.';
       } else if (finalRisk === 'medium') {
         const prep = preparePayment(db, {
           userId,
@@ -664,15 +664,17 @@ export async function processConversation(
       });
       replyText = askForNewPayeeDetails(newPayee, lang);
     } else if (intentResult.intent === 'send_money') {
+      const statedPayee = intentResult.recipient_alias
+        ?? (session.state === 'awaiting_payment_details' ? session.pendingPayeeRaw : null);
       if (!intentResult.amount) {
         updateSession(sessionId, {
           state: 'awaiting_payment_details',
-          pendingPayeeRaw: intentResult.recipient_alias ?? session.pendingPayeeRaw,
-          pendingPayeeName: intentResult.recipient_alias ?? session.pendingPayeeName,
+          pendingPayeeRaw: statedPayee ?? session.pendingPayeeRaw,
+          pendingPayeeName: statedPayee ?? session.pendingPayeeName,
           unclearAttempts: 0,
         });
         replyText = templates[lang].clarify_amount;
-      } else if (!intentResult.recipient_alias) {
+      } else if (!statedPayee) {
         updateSession(sessionId, {
           state: 'awaiting_payment_details',
           pendingAmount: intentResult.amount,
@@ -681,7 +683,7 @@ export async function processConversation(
         replyText = templates[lang].clarify_recipient;
       } else {
         try {
-          const payee = intentResult.recipient_alias;
+          const payee = statedPayee;
           const amount = intentResult.amount;
           const resolvedPayee = resolvePayee(db, userId, payee);
 

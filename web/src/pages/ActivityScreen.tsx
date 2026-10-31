@@ -508,11 +508,31 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({ lang = 'en-IN', 
           </span>
         </button>
         <div role="status" aria-live="polite" style={{ fontSize: 'var(--text-body-large)', textAlign: 'center', fontWeight: 700 }}>{status}</div>
-        <BodyText muted style={{ textAlign: 'center' }}>
-          {lang === 'hi-IN'
-            ? 'Ya mic se boliye: “mera aakhri payment”, “is hafte kitna kharch hua”, “agla”, “PayPal balance batao”, ya “ghar jao”.'
-            : 'Or ask the mic: “my latest payment”, “how much did I spend this week”, “next”, “check PayPal balance”, or “go home”.'}
-        </BodyText>
+        <section
+          aria-labelledby="activity-voice-examples-heading"
+          style={{ width: '100%', padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', background: 'var(--surface)', textAlign: 'left' }}
+        >
+          <h2 id="activity-voice-examples-heading" style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text)' }}>
+            {lang === 'hi-IN' ? 'हिसाब के बारे में पूछें' : 'Ask about your activity'}
+          </h2>
+          <p style={{ marginTop: '0.25rem', marginBottom: '0.75rem', fontSize: '1rem', color: 'var(--text-muted)' }}>
+            {lang === 'hi-IN' ? 'Mic dabakar inmein se kuch boliye' : 'Tap the mic and try saying'}
+          </p>
+          <ul
+            aria-label={lang === 'hi-IN' ? 'Hisaab ke voice commands' : 'Activity voice command examples'}
+            style={{ listStyle: 'none', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.75rem 1rem', padding: 0, margin: 0 }}
+          >
+            {(lang === 'hi-IN'
+              ? ['“Mera aakhri payment”', '“Is hafte kitna kharch hua?”', '“Agla”', '“PayPal balance batao”', '“Ghar jao”']
+              : ['“My latest payment”', '“How much did I spend this week?”', '“Next”', '“Check PayPal balance”', '“Go home”']
+            ).map((command) => (
+              <li key={command} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', minWidth: 0, color: 'var(--text)', fontSize: '1.05rem', fontWeight: 600 }}>
+                <span aria-hidden="true" style={{ flex: 'none', width: '0.55rem', height: '0.55rem', marginTop: '0.45rem', borderRadius: '50%', background: 'var(--accent)' }} />
+                <span>{command}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
         {(lastHeard || assistantReply || micError || balanceError) && (
           <div aria-live="polite" aria-atomic="true" style={{ width: '100%', padding: '1rem', border: '2px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', background: 'var(--surface)' }}>
             {lastHeard && <BodyText><strong>{lang === 'hi-IN' ? 'Aapne kaha:' : 'You said:'}</strong> {lastHeard}</BodyText>}

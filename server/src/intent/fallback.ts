@@ -65,6 +65,13 @@ function findContact(text: string, contacts: string[]): string | null {
   const emailMatch = text.match(/[\w.-]+@[\w.-]+\.\w+/);
   if (emailMatch) return emailMatch[0];
 
+  // Keep an explicitly spoken, previously unknown English payee name so the
+  // conversation can offer the safe QR/email flow instead of asking "who?" again.
+  const namedRecipientMatch = text.match(
+    /\bto\s+([\p{L}\p{M}][\p{L}\p{M}.'’-]*(?:\s+[\p{L}\p{M}][\p{L}\p{M}.'’-]*){0,4})(?=$|[,.!?]|\s+(?:for|please|because)\b)/iu
+  );
+  if (namedRecipientMatch) return namedRecipientMatch[1].trim();
+
   const koMatch = text.match(/(?:^|\s)([\w.-]+)\s+ko\b/i);
   if (koMatch && !['kisi', 'sab', 'unko', 'inko', 'mujhe', 'humko', 'kisko'].includes(koMatch[1].toLowerCase())) {
     return koMatch[1];

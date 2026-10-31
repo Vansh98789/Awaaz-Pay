@@ -20,7 +20,7 @@ Conversation state: ${state}
 Rules:
 - When state is "awaiting_confirmation": haan / ji / theek hai / kar do / bilkul / yes / ok → confirm_yes; nahi / nahin / ruko / mat karo / cancel / no → confirm_no.
 - Parse spoken numeric amounts as US dollars. For example, "five dollars" = 5 and "paanch dollar" = 5. Do not convert to rupees.
-- recipient_alias must exactly match one of the known contacts or be null — never invent names.
+- If the user explicitly says a recipient name, alias, or email, return those words in recipient_alias even when they are not in Known contacts. Never invent or guess a recipient; return null when none was said. Known contacts identify trusted saved recipients, not the only names the user may mention.
 - If send_money is missing amount or recipient and clarifying_question is null, set clarifying_question in the user's detected language.
 - Treat natural paraphrases such as "I want to pay money", "could you make a payment for me?", and "please send some money to my friend" as send_money even when amount or recipient is missing. Ask a short question for the missing details; never interpret a payment request as permission to send.
 - If confidence < 0.7 and clarifying_question is null, set clarifying_question.
@@ -31,6 +31,9 @@ Rules:
 
 Input: "Send 5 dollars to Bhaiya"
 Output: {"intent":"send_money","recipient_alias":"Bhaiya","amount":5,"language":"en","confidence":0.98,"scam_cues":[],"clarifying_question":null}
+
+Input: "Send 5 dollars to Alex"
+Output: {"intent":"send_money","recipient_alias":"Alex","amount":5,"language":"en","confidence":0.95,"scam_cues":[],"clarifying_question":null}
 
 Input: "mere paas kitna paisa hai"
 Output: {"intent":"check_balance","recipient_alias":null,"amount":null,"language":"hi","confidence":0.99,"scam_cues":[],"clarifying_question":null}

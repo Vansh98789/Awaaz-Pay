@@ -37,6 +37,15 @@ interface PendingApproval {
   url: string;
 }
 
+interface FamilyContact {
+  id: string;
+  alias: string;
+  display_name: string;
+  paypal_email: string;
+  status: 'active' | 'cooling_off';
+  activated_at: string | null;
+}
+
 interface LimitsData {
   daily_total: number;
   per_transaction_new_payee: number;
@@ -57,6 +66,7 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
   const [userName, setUserName] = useState<string>('Meena');
   const [paypalBalance, setPaypalBalance] = useState<{ available: string; total: string; asOf: string | null; accountEmail?: string | null } | null>(null);
   const [paypalBalanceError, setPaypalBalanceError] = useState<string | null>(null);
+  const [loadingBalance, setLoadingBalance] = useState(false);
   const [limits, setLimits] = useState<LimitsData>({
     daily_total: 5000,
     per_transaction_new_payee: 500,
@@ -64,9 +74,17 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
   });
   const [transactions, setTransactions] = useState<ActivityRow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [contacts, setContacts] = useState<FamilyContact[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState<string>('');
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [contactName, setContactName] = useState('');
+  const [contactAlias, setContactAlias] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [contactError, setContactError] = useState<string | null>(null);
+  const [contactMessage, setContactMessage] = useState<string | null>(null);
+  const [savingContact, setSavingContact] = useState(false);
 
   useEffect(() => {
     fetchDashboardData();
@@ -74,6 +92,7 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
   }, []);
 
   const fetchPayPalBalance = async () => {
+    setLoadingBalance(true);
     try {
       setPaypalBalanceError(null);
       const res = await fetch('/api/family/paypal-balance');
@@ -86,6 +105,8 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
       setPaypalBalanceError(/fetch failed|failed to fetch/i.test(message)
         ? 'Could not reach PayPal Sandbox just now.'
         : message);
+    } finally {
+      setLoadingBalance(false);
     }
   };
 
@@ -102,10 +123,44 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
       if (data.limits) setLimits({ ...data.limits, daily_total: Math.min(Number(data.limits.daily_total) || 5000, 5000) });
       setTransactions(data.transactions || []);
       setPendingApprovals(data.pendingApprovals || []);
+      setContacts(data.contacts || []);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const addRegularPayee = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    try {
+      setSavingContact(true);
+      setContactError(null);
+      setContactMessage(null);
+      const response = await fetch('/api/family/contacts', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          displayName: contactName.trim(),
+          alias: contactAlias.trim() || contactName.trim(),
+          paypalEmail: contactEmail.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not add this payee.');
+      setContacts((previous) => [...previous, data.contact].sort((a, b) => a.alias.localeCompare(b.alias)));
+      setContactName('');
+      setContactAlias('');
+      setContactEmail('');
+      setShowAddContact(false);
+      setContactMessage(data.inCoolingOff
+        ? `${data.contact.display_name} was added. They can be used as a regular payee after the ${data.coolingHours}-hour safety hold.`
+        : `${data.contact.display_name} was added to the regular payee list.`);
+    } catch (err) {
+      setContactError((err as Error).message || 'Could not add this payee.');
+    } finally {
+      setSavingContact(false);
     }
   };
 
@@ -254,79 +309,223 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
     []
   );
 
+  const summaryCardStyle: React.CSSProperties = {
+    padding: '1.25rem',
+    background: 'var(--surface)',
+    border: '2px solid var(--border)',
+    borderRadius: 'var(--radius-card, 16px)',
+    boxShadow: '0 6px 20px rgba(0, 0, 0, 0.06)',
+    color: 'var(--text)',
+  };
+  const summaryLabelStyle: React.CSSProperties = {
+    display: 'block',
+    color: 'var(--text-muted)',
+    fontSize: '0.85rem',
+    fontWeight: 750,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+  };
+  const balanceReportTime = paypalBalance?.asOf && !Number.isNaN(Date.parse(paypalBalance.asOf))
+    ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(paypalBalance.asOf))
+    : null;
+
   return (
     <div className="guardian-page-container" style={{ maxWidth: '980px' }}>
-      <header className="guardian-header">
-        <h1>🛡️ Awaaz Pay · Family Activity Dashboard</h1>
-        <p className="guardian-subtitle">Guardian Oversight & Real-Time Security Monitoring (AG Grid)</p>
-        <button type="button" className="auth-secondary-btn" onClick={onLogout} style={{ minHeight: '44px', marginTop: '0.75rem' }}>
-          Sign out of family portal
+      <header style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '2rem', paddingBottom: '1.5rem', borderBottom: '1px solid var(--border)' }}>
+        <div>
+          <p style={{ color: 'var(--accent)', fontSize: '0.9rem', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase' }}>Awaaz Pay · Family portal</p>
+          <h1 style={{ marginTop: '0.35rem', color: 'var(--text)', fontSize: 'clamp(2rem, 6vw, 2.75rem)', letterSpacing: '-0.035em', lineHeight: 1.15 }}>Family dashboard</h1>
+          <p style={{ marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '1.1rem' }}>Review payments, manage regular payees, and handle approvals.</p>
+        </div>
+        <button type="button" onClick={onLogout} style={{ minHeight: '64px', minWidth: '64px', padding: '0.75rem 1.1rem', border: '2px solid var(--border)', borderRadius: 'var(--radius-pill)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
+          Sign out
         </button>
       </header>
 
       {loading && (
-        <div className="guardian-card loading" style={{ marginBottom: '1rem', padding: '1.25rem' }}>
-          ⏳ Loading activity and security data...
+        <div role="status" className="guardian-card loading" style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', color: 'var(--text-muted)' }}>
+          Loading family activity…
         </div>
       )}
 
-      {/* Summary Stat Cards */}
-      <div
+      <section
+        aria-label="Family account overview"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
           gap: '1rem',
-          marginBottom: '1.25rem',
+          marginBottom: '2rem',
         }}
       >
-        <div className="guardian-card" style={{ padding: '1rem' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>User Profile</span>
-          <h3 style={{ fontSize: '1.25rem', marginTop: '0.25rem' }}>{userName}</h3>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Voice-first payment demo</span>
-        </div>
+        <section style={{ ...summaryCardStyle, minHeight: '150px' }}>
+          <span style={summaryLabelStyle}>Wallet owner</span>
+          <h2 style={{ marginTop: '0.8rem', fontSize: '1.75rem', lineHeight: 1.2 }}>{userName}</h2>
+          <p style={{ marginTop: '0.5rem', color: 'var(--text-muted)' }}>Voice-first payment account</p>
+        </section>
 
-        <div className="guardian-card" style={{ padding: '1rem' }} aria-live="polite">
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>PayPal sender account · Sandbox USD</span>
+        <section aria-live="polite" aria-label="PayPal Sandbox balance" style={{ ...summaryCardStyle, minWidth: 0 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+            <span style={summaryLabelStyle}>PayPal Sandbox · USD</span>
+            <button type="button" onClick={fetchPayPalBalance} disabled={loadingBalance} aria-busy={loadingBalance} style={{ minHeight: '64px', minWidth: '64px', padding: '0.5rem 0.9rem', border: '2px solid var(--border)', borderRadius: 'var(--radius-pill)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', fontWeight: 700, cursor: loadingBalance ? 'wait' : 'pointer' }}>
+              {loadingBalance ? 'Updating…' : '↻ Refresh'}
+            </button>
+          </div>
           {paypalBalance ? (
             <>
-              <h3 style={{ fontSize: '1.35rem', color: 'var(--success)', marginTop: '0.25rem' }}>
-                ${Number(paypalBalance.available).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} available
-              </h3>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                Total: ${Number(paypalBalance.total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                {paypalBalance.accountEmail ? ` · ${paypalBalance.accountEmail}` : ''}
-                {paypalBalance.asOf ? ` · PayPal report as of ${new Date(paypalBalance.asOf).toLocaleString()}` : ''}
-              </span>
-              <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
-                PayPal payouts are sent from this account. PayPal’s payout status confirms transfers; the balance report may lag.
-              </span>
+              <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '1rem', fontWeight: 650 }}>Available balance</p>
+              <p style={{ marginTop: '0.15rem', color: 'var(--success)', fontSize: 'clamp(2rem, 6vw, 2.75rem)', fontWeight: 800, lineHeight: 1.1 }}>
+                ${Number(paypalBalance.available).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+              <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '1rem', margin: '1.25rem 0 0', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+                <div>
+                  <dt style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Total balance</dt>
+                  <dd style={{ marginTop: '0.25rem', fontSize: '1.1rem', fontWeight: 750 }}>
+                    ${Number(paypalBalance.total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </dd>
+                </div>
+                {paypalBalance.accountEmail && (
+                  <div style={{ minWidth: 0 }}>
+                    <dt style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Sender account</dt>
+                    <dd style={{ marginTop: '0.25rem', fontSize: '0.95rem', fontWeight: 650, overflowWrap: 'anywhere' }}>{paypalBalance.accountEmail}</dd>
+                  </div>
+                )}
+              </dl>
+              <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                {balanceReportTime ? `Balance report updated ${balanceReportTime}. ` : ''}Reports can lag; payout status confirms individual transfers.
+              </p>
             </>
           ) : (
-            <>
-              <h3 style={{ fontSize: '1rem', marginTop: '0.25rem' }}>Unavailable</h3>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                {paypalBalanceError || 'Loading PayPal balance…'} Tap refresh to retry. PayPal reporting can lag by up to 3 hours.
-              </span>
-              <button type="button" onClick={fetchPayPalBalance} className="auth-secondary-btn" style={{ marginTop: '0.5rem', minHeight: '44px' }}>
-                Refresh PayPal balance
-              </button>
-            </>
+            <div style={{ marginTop: '1rem' }}>
+              <h2 style={{ fontSize: '1.25rem' }}>{loadingBalance ? 'Checking balance…' : 'Balance unavailable'}</h2>
+              <p style={{ marginTop: '0.4rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                {paypalBalanceError || 'PayPal Sandbox balance has not loaded yet.'} Reports can take time to update.
+              </p>
+            </div>
           )}
-        </div>
+        </section>
 
-        <div className="guardian-card" style={{ padding: '1rem' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Daily Spend Cap · USD</span>
-          <h3 style={{ fontSize: '1.25rem', marginTop: '0.25rem' }}>
+        <section style={{ ...summaryCardStyle, minHeight: '150px' }}>
+          <span style={summaryLabelStyle}>Daily spend limit</span>
+          <h2 style={{ marginTop: '0.8rem', fontSize: '1.75rem', lineHeight: 1.2 }}>
             ${limits.daily_total.toLocaleString('en-US')}
-          </h3>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-            ${limits.per_transaction_new_payee} per new payee
-          </span>
-        </div>
-
-      </div>
+          </h2>
+          <p style={{ marginTop: '0.5rem', color: 'var(--text-muted)' }}>
+            ${limits.per_transaction_new_payee.toLocaleString('en-US')} per new payee
+          </p>
+        </section>
+      </section>
 
       {error && <p className="error-banner">⚠️ {error}</p>}
+
+      <section
+        aria-labelledby="regular-payees-heading"
+        className="guardian-card"
+        style={{ margin: '2rem 0', padding: '1.25rem', color: 'var(--text)', background: 'var(--surface)', border: '2px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', boxShadow: '0 6px 20px rgba(0, 0, 0, 0.06)' }}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+          <div>
+            <h2 id="regular-payees-heading" style={{ fontSize: '1.5rem', fontWeight: 700 }}>Regular payees</h2>
+            <p style={{ marginTop: '0.5rem', color: 'var(--text-muted, #4A4A4A)', fontSize: '1.1rem' }}>
+              Add people Meena pays often. Use their exact PayPal Sandbox email.
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-expanded={showAddContact}
+            aria-controls="add-regular-payee-form"
+            onClick={() => {
+              setShowAddContact((open) => !open);
+              setContactError(null);
+              setContactMessage(null);
+            }}
+            style={{ minHeight: 'var(--min-target, 64px)', minWidth: '64px', width: '100%', maxWidth: '560px', padding: '0.75rem 1rem', border: 0, borderRadius: 'var(--radius-pill, 9999px)', background: 'var(--accent, #1D4ED8)', color: 'var(--accent-text, #fff)', font: 'inherit', fontWeight: 700, cursor: 'pointer' }}
+          >
+            {showAddContact ? 'Close' : '+ Add regular payee'}
+          </button>
+        </div>
+
+        {contactMessage && <p role="status" aria-live="polite" style={{ marginTop: '1rem', color: 'var(--success, #0F7B3F)', fontWeight: 700 }}>{contactMessage}</p>}
+        {contactError && <p role="alert" style={{ marginTop: '1rem', color: 'var(--danger, #B42318)', fontWeight: 700 }}>{contactError}</p>}
+
+        {showAddContact && (
+          <form id="add-regular-payee-form" onSubmit={addRegularPayee} style={{ display: 'grid', gap: '1rem', width: '100%', maxWidth: '560px', marginTop: '1.5rem' }}>
+            <div>
+              <label htmlFor="regular-payee-name" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 700 }}>Payee name</label>
+              <input
+                id="regular-payee-name"
+                name="displayName"
+                autoComplete="name"
+                required
+                maxLength={80}
+                value={contactName}
+                onChange={(event) => setContactName(event.target.value)}
+                className="form-input"
+                placeholder="Name shown in the app"
+                style={{ minHeight: 'var(--min-target, 64px)', width: '100%', padding: '0.75rem 1rem', font: 'inherit' }}
+              />
+            </div>
+            <div>
+              <label htmlFor="regular-payee-alias" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 700 }}>Name Meena can say (optional)</label>
+              <input
+                id="regular-payee-alias"
+                name="alias"
+                maxLength={80}
+                value={contactAlias}
+                onChange={(event) => setContactAlias(event.target.value)}
+                className="form-input"
+                placeholder="Leave blank to use the payee name"
+                style={{ minHeight: 'var(--min-target, 64px)', width: '100%', padding: '0.75rem 1rem', font: 'inherit' }}
+              />
+            </div>
+            <div>
+              <label htmlFor="regular-payee-email" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 700 }}>PayPal Sandbox email</label>
+              <input
+                id="regular-payee-email"
+                name="paypalEmail"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
+                required
+                maxLength={254}
+                value={contactEmail}
+                onChange={(event) => setContactEmail(event.target.value)}
+                className="form-input"
+                placeholder="name@example.com"
+                style={{ minHeight: 'var(--min-target, 64px)', width: '100%', padding: '0.75rem 1rem', font: 'inherit' }}
+              />
+              <p style={{ marginTop: '0.5rem', color: 'var(--text-muted, #4A4A4A)' }}>Check the email with the person before saving it.</p>
+            </div>
+            <button
+              type="submit"
+              disabled={savingContact}
+              aria-busy={savingContact}
+              style={{ minHeight: 'var(--min-target, 64px)', width: '100%', minWidth: '64px', padding: '0.75rem 1rem', border: '2px solid var(--accent, #1D4ED8)', borderRadius: 'var(--radius-pill, 9999px)', background: 'var(--accent, #1D4ED8)', color: 'var(--accent-text, #fff)', font: 'inherit', fontWeight: 700, cursor: savingContact ? 'wait' : 'pointer' }}
+            >
+              {savingContact ? 'Saving payee…' : 'Save regular payee'}
+            </button>
+          </form>
+        )}
+
+        {contacts.length > 0 ? (
+          <ul aria-label="Saved regular payees" style={{ listStyle: 'none', marginTop: '1.5rem', padding: 0, borderTop: '1px solid var(--border, #D6D6D2)' }}>
+            {contacts.map((contact) => (
+              <li key={contact.id} style={{ display: 'grid', gap: '0.25rem', padding: '1rem 0', borderBottom: '1px solid var(--border, #D6D6D2)' }}>
+                <strong style={{ fontSize: '1.15rem' }}>{contact.display_name} <span style={{ color: 'var(--text-muted, #4A4A4A)', fontWeight: 500 }}>({contact.alias})</span></strong>
+                <span>{contact.paypal_email}</span>
+                <span style={{ color: contact.status === 'active' ? 'var(--success, #0F7B3F)' : 'var(--warning, #8A5A00)', fontWeight: 700 }}>
+                  {contact.status === 'active'
+                    ? 'Ready to use'
+                    : `Safety hold until ${contact.activated_at ? new Date(contact.activated_at).toLocaleString() : 'later'}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p style={{ marginTop: '1.5rem', color: 'var(--text-muted, #4A4A4A)' }}>No regular payees have been added yet.</p>
+        )}
+      </section>
 
       {/* Pending Approvals Action Banner */}
       {pendingApprovals.length > 0 && (
@@ -378,7 +577,7 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
       )}
 
       {/* AG Grid Activity Table */}
-      <div className="guardian-card" style={{ padding: '1.25rem' }}>
+      <div className="guardian-card" style={{ padding: '1.25rem', color: 'var(--text)', background: 'var(--surface)', border: '2px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', boxShadow: '0 6px 20px rgba(0, 0, 0, 0.06)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: 700 }}>
             Activity & Risk Audit Log

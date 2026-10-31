@@ -13,6 +13,28 @@
   font-family: var(--font-sans);
 }
 
+/* Give the Wallet home screen a subtle phone-like surface against the dark page. */
+html:has(.wallet-home-page),
+body:has(.wallet-home-page),
+#root:has(.wallet-home-page) {
+  background-color: #000;
+}
+
+.wallet-home-page {
+  width: min(calc(100% - 16px), var(--max-width, 560px));
+  min-height: calc(100vh - 16px);
+  margin: 8px auto;
+  border: 1px solid #d6d6d2;
+  border-radius: 24px;
+  background-color: #e8e8e5;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme='dark'] .wallet-home-page {
+  border-color: #35353a;
+  background-color: #202024;
+}
+
 .page-header {
   display: flex;
   flex-direction: column;

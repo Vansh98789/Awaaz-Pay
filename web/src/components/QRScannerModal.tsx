@@ -51,6 +51,8 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   const scanningActiveRef = useRef<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
   const timeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastScanTimeRef = useRef(0);
+  const barcodeDetectorRef = useRef<any>(null);
 
   const getGuidanceText = (msg: GuidanceMessage): string => {
     switch (msg) {
@@ -137,6 +139,10 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
       });
 
       streamRef.current = stream;
+      const BarcodeDetectorClass = (window as any).BarcodeDetector;
+      barcodeDetectorRef.current = BarcodeDetectorClass
+        ? new BarcodeDetectorClass({ formats: ['qr_code'] })
+        : null;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
@@ -186,26 +192,36 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
+    // Decode at a steady 10 fps instead of consuming a full CPU core on every
+    // display frame. This keeps the camera preview and the rest of the UI responsive.
+    const now = performance.now();
+    if (now - lastScanTimeRef.current < 100) {
+      requestAnimationFrame(scanFrame);
+      return;
+    }
+    lastScanTimeRef.current = now;
+
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
       const width = video.videoWidth;
       const height = video.videoHeight;
-      canvas.width = width;
-      canvas.height = height;
+      const scale = Math.min(1, 480 / width);
+      const scanWidth = Math.round(width * scale);
+      const scanHeight = Math.round(height * scale);
+      canvas.width = scanWidth;
+      canvas.height = scanHeight;
 
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (ctx) {
-        ctx.drawImage(video, 0, 0, width, height);
+        ctx.drawImage(video, 0, 0, scanWidth, scanHeight);
 
         let qrData: string | null = null;
         let boxWidth = 0;
         let centerX = 0;
 
         // 1. BarcodeDetector API
-        const win = window as any;
-        if (win.BarcodeDetector) {
+        if (barcodeDetectorRef.current) {
           try {
-            const detector = new win.BarcodeDetector({ formats: ['qr_code'] });
-            const barcodes = await detector.detect(video);
+            const barcodes = await barcodeDetectorRef.current.detect(video);
             if (barcodes.length > 0) {
               const b = barcodes[0];
               qrData = b.rawValue;
@@ -219,7 +235,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
 
         // 2. jsQR Fallback
         if (!qrData) {
-          const imageData = ctx.getImageData(0, 0, width, height);
+          const imageData = ctx.getImageData(0, 0, scanWidth, scanHeight);
           const code = jsQR(imageData.data, imageData.width, imageData.height, {
             inversionAttempts: 'dontInvert',
           });
@@ -233,8 +249,9 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
 
         // Compute positioning & distance guidance
         if (qrData) {
-          const xRatio = centerX / width;
-          const sizeRatio = boxWidth / width;
+          const detectedFrameWidth = barcodeDetectorRef.current ? width : scanWidth;
+          const xRatio = centerX / detectedFrameWidth;
+          const sizeRatio = boxWidth / detectedFrameWidth;
 
           if (xRatio < 0.35) {
             triggerGuidance('little_right');

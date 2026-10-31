@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import type Database from 'better-sqlite3';
+import crypto from 'node:crypto';
 import { createOrder, captureOrder, getPayPalBalances, PayPalError } from '../paypal/index.js';
 import {
   addLedgerEntry,
@@ -7,7 +8,10 @@ import {
   createNotification,
   writeAudit,
   hasLedgerRef,
+  listContacts,
+  upsertContact,
 } from '../db/repository.js';
+import type { ContactStatus } from '../db/types.js';
 import { formatFundingNotificationHindi } from '../notifications/templates.js';
 import { refreshPayoutStatus } from '../payments/pipeline.js';
 import { config } from '../config.js';
@@ -114,6 +118,71 @@ export function createFamilyRouter(db: Database.Database): Router {
   // Family data and actions always require the separate guardian session.
   // This intentionally does not honor DEMO_AUTH_BYPASS.
   router.use(requireFamilyAuth);
+
+  router.post('/contacts', (req: Request, res: Response) => {
+    try {
+      const userId = 'user_meena';
+      const displayName = typeof req.body.displayName === 'string' ? req.body.displayName.trim() : '';
+      const alias = typeof req.body.alias === 'string' ? req.body.alias.trim() : displayName;
+      const paypalEmail = typeof req.body.paypalEmail === 'string' ? req.body.paypalEmail.trim() : '';
+
+      if (
+        !displayName || displayName.length > 80 || !alias || alias.length > 80
+        || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paypalEmail) || paypalEmail.length > 254
+      ) {
+        res.status(400).json({ error: 'Enter a payee name, spoken nickname, and valid PayPal Sandbox email' });
+        return;
+      }
+
+      const duplicate = db.prepare<[string, string, string, string], { id: string }>(`
+        SELECT id FROM contacts WHERE user_id = ? AND (
+          LOWER(paypal_email) = LOWER(?) OR LOWER(alias) = LOWER(?) OR LOWER(display_name) = LOWER(?)
+        ) LIMIT 1
+      `).get(userId, paypalEmail, alias, displayName);
+      if (duplicate) {
+        res.status(409).json({ error: 'A saved payee already uses that email, name, or nickname.' });
+        return;
+      }
+
+      const now = new Date();
+      const skipCooling = process.env.DEMO_SKIP_COOLING === 'true';
+      const coolingHoursRaw = Number.parseInt(process.env.CONTACT_COOLING_OFF_HOURS || '24', 10);
+      const coolingHours = Number.isFinite(coolingHoursRaw) ? Math.max(1, Math.min(coolingHoursRaw, 168)) : 24;
+      const status: ContactStatus = skipCooling ? 'active' : 'cooling_off';
+      const activatedAt = skipCooling
+        ? now.toISOString()
+        : new Date(now.getTime() + coolingHours * 60 * 60 * 1000).toISOString();
+      const guardianId = db.prepare<[string], { id: string }>(
+        'SELECT id FROM guardians WHERE user_id = ? ORDER BY id LIMIT 1'
+      ).get(userId)?.id || 'guardian_family_dashboard';
+      const contact = upsertContact(db, {
+        id: `contact_${crypto.randomUUID().slice(0, 8)}`,
+        user_id: userId,
+        alias,
+        display_name: displayName,
+        paypal_email: paypalEmail,
+        status,
+        added_by: guardianId,
+        activated_at: activatedAt,
+      });
+
+      createNotification(db, {
+        user_id: userId,
+        kind: 'contact_added',
+        message: `Family added ${displayName} (${paypalEmail}) to regular payees. Status: ${status}.`,
+        spoken_text: `Aapki family ne ${displayName} ko regular payee list mein joda hai.`,
+      });
+      writeAudit(db, {
+        user_id: userId,
+        kind: 'family_contact_added',
+        payload: JSON.stringify({ contactId: contact.id, displayName, alias, paypalEmail, status, activatedAt }),
+      });
+
+      res.status(201).json({ contact, inCoolingOff: status === 'cooling_off', coolingHours });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   // The displayed account balance is the PayPal Business Sandbox sender balance.
   router.get('/paypal-balance', async (_req: Request, res: Response) => {
@@ -252,6 +321,7 @@ export function createFamilyRouter(db: Database.Database): Router {
         success: true,
         userName: user.name,
         limits,
+        contacts: listContacts(db, uid),
         transactions: allActivity,
         pendingApprovals,
       });

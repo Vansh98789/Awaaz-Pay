@@ -293,7 +293,7 @@ export const App: React.FC = () => {
     };
     setTranscripts((prev) => [...prev, userEntry]);
 
-    const parsedCommand = pendingConfirmation.isOpen ? parseVoiceCommand(text) : null;
+    const parsedCommand = parseVoiceCommand(text);
     let command: ReturnType<typeof parseVoiceCommand> = parsedCommand === 'read_history' ? 'open_activity' : parsedCommand;
     const normalized = text
       .normalize('NFKC')
@@ -360,7 +360,7 @@ export const App: React.FC = () => {
     const paymentConversationActive = conversationState !== 'idle';
     const scannerRequested = isExplicitScannerRequest(text);
     const routeToPaymentConversation = (paymentConversationActive || isPaymentConversationUtterance(text)) && !scannerRequested;
-    if (!pendingConfirmation.isOpen && !agentAlreadyDelegated && !routeToPaymentConversation) {
+    if (!pendingConfirmation.isOpen && !agentAlreadyDelegated && !routeToPaymentConversation && !command) {
       try {
         const agentResponse = await fetch('/api/agent/understand', {
           method: 'POST',
@@ -626,8 +626,8 @@ export const App: React.FC = () => {
         setIsSettingsOpen(true);
         setSettingsAwaitingChoice(true);
         reply = lang === 'hi-IN'
-          ? 'Settings khol di. Aap kya badalna chahte hain? Light ya dark theme, Hindi ya English, bolne ki raftaar, voice mode, ya hands-free boliye.'
-          : 'Settings are open. What would you like to change? Say light or dark theme, Hindi or English, speech speed, voice mode, or hands-free.';
+          ? 'Settings khul gayi. Theme, language, awaaz, ya hands-free badalne ko kahiye.'
+          : 'Settings are open. Say what to change: theme, language, voice, or hands-free.';
       } else if (command === 'close_settings') {
         setIsSettingsOpen(false);
         setSettingsAwaitingChoice(false);
@@ -1325,6 +1325,7 @@ export const App: React.FC = () => {
 
   return (
     <Page
+      className="wallet-home-page"
       headerContent={
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
@@ -1359,11 +1360,31 @@ export const App: React.FC = () => {
             {statusOneLine}
           </div>
 
-          <BodyText muted style={{ textAlign: 'center' }}>
-            {lang === 'hi-IN'
-              ? 'Scanner kholo, merchant portal kholo, hisaab sunao, PayPal balance batao, family portal kholo, settings kholo, ya “dobara bolo” kahein.'
-              : 'Say “open scanner”, “open merchant portal”, “read my history”, “check PayPal balance”, “open family portal”, “open settings”, or “repeat what you said”.'}
-          </BodyText>
+          <section
+            aria-labelledby="voice-command-heading"
+            style={{ width: '100%', padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)', background: 'var(--surface)', textAlign: 'left' }}
+          >
+            <h2 id="voice-command-heading" style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text)' }}>
+              {lang === 'hi-IN' ? 'बोलकर आज़माएँ' : 'Try a voice command'}
+            </h2>
+            <p style={{ marginTop: '0.25rem', marginBottom: '0.75rem', fontSize: '1rem', color: 'var(--text-muted)' }}>
+              {lang === 'hi-IN' ? 'इनमें से कोई एक बात कहें' : 'Say any one of these'}
+            </p>
+            <ul
+              aria-label={lang === 'hi-IN' ? 'आवाज़ के निर्देश' : 'Voice command examples'}
+              style={{ listStyle: 'none', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.75rem 1rem', padding: 0, margin: 0 }}
+            >
+              {(lang === 'hi-IN'
+                ? ['“Scanner kholo”', '“Merchant portal kholo”', '“Hisaab sunao”', '“PayPal balance batao”', '“Family portal kholo”', '“Settings kholo”', '“Dobara bolo”']
+                : ['“Open scanner”', '“Open merchant portal”', '“Read my history”', '“Check PayPal balance”', '“Open family portal”', '“Open settings”', '“Repeat that”']
+              ).map((command) => (
+                <li key={command} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', minWidth: 0, color: 'var(--text)', fontSize: '1.05rem', fontWeight: 600 }}>
+                  <span aria-hidden="true" style={{ flex: 'none', width: '0.55rem', height: '0.55rem', marginTop: '0.45rem', borderRadius: '50%', background: 'var(--accent)' }} />
+                  <span>{command}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
           <nav aria-label={lang === 'hi-IN' ? 'App pages' : 'App shortcuts'} style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '1rem', width: '100%', marginTop: '0.5rem' }}>
             <button
               type="button"
@@ -1607,13 +1628,13 @@ export const App: React.FC = () => {
               : (lang === 'hi-IN' ? 'और क्या बदलना है?' : 'What would you like to change next?')}</Headline>
             <BodyText size="large">
               {lang === 'hi-IN'
-                ? 'Aap naturally bata sakte hain ki kya badalna hai—jaise screen ko halka karna, Hindi mein baat karna, ya dheere bolna. Agar mujhe aapki pasand samajh nahi aayi to main dobara poochungi.'
-                : 'Tell me naturally what you want changed—for example, make the screen lighter, speak Hindi, or slow down. If I need your choice, I’ll ask a follow-up.'}
+                ? 'Theme, language, ya bolne ki raftaar badalne ko kahiye.'
+                : 'Say what you want to change, like theme, language, or speech speed.'}
             </BodyText>
             <BodyText muted>
               {lang === 'hi-IN'
-                ? `Abhi ${themeMode === 'light' ? 'light' : 'dark'} theme, Hindi, ${outputMode === 'voice' ? 'voice' : 'screen reader'} output, ${speed.toFixed(1)} guna bolne ki raftaar hai. Hands-free ${isContinuousVoice ? 'chalu' : 'band'} hai.`
-                : `Current theme: ${themeMode}. Language: English. Output: ${outputMode === 'voice' ? 'spoken voice' : 'screen reader'}. Speech speed: ${speed.toFixed(1)}×. Hands-free is ${isContinuousVoice ? 'on' : 'off'}.`}
+                ? `${themeMode === 'light' ? 'Light' : 'Dark'} theme. Hindi. ${outputMode === 'voice' ? 'Voice' : 'Screen reader'}. Raftaar ${speed.toFixed(1)} guna. Hands-free ${isContinuousVoice ? 'chalu' : 'band'}.`
+                : `${themeMode === 'light' ? 'Light' : 'Dark'}. English. ${outputMode === 'voice' ? 'Voice' : 'Screen reader'}. Speed ${speed.toFixed(1)}×. Hands-free ${isContinuousVoice ? 'on' : 'off'}.`}
             </BodyText>
             <section aria-labelledby="theme-setting-title" style={{ display: 'grid', gap: '0.6rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>
               <strong id="theme-setting-title">🎨 {lang === 'hi-IN' ? 'रंग और थीम' : 'Appearance'}</strong>
