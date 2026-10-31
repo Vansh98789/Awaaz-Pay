@@ -70,8 +70,20 @@ export function createFamilyRouter(db: Database.Database): Router {
   router.get('/wallet-activity', requireAuth, async (req: Request, res: Response) => {
     try {
       const uid = req.user?.id || 'user_meena';
-      const rows = db.prepare<[string], import('../db/types.js').Transaction>(
-        'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC'
+      const inFlight = db.prepare<[string], { id: string }>(
+        "SELECT id FROM transactions WHERE user_id = ? AND status = 'processing' AND paypal_ref IS NOT NULL"
+      ).all(uid);
+      const paypalStatusByTransaction = new Map<string, string>();
+      await Promise.all(inFlight.map(async ({ id }) => {
+        const refreshed = await refreshPayoutStatus(db, id);
+        if (refreshed.paypalStatus) paypalStatusByTransaction.set(id, refreshed.paypalStatus);
+      }));
+
+      // Re-read after status refresh so the activity list reflects any completion/failure found above.
+      const rows = db.prepare<[string], import('../db/types.js').Transaction & { approval_status: string | null }>(
+        `SELECT t.*,
+          (SELECT a.status FROM approvals a WHERE a.transaction_id = t.id ORDER BY a.created_at DESC LIMIT 1) AS approval_status
+         FROM transactions t WHERE t.user_id = ? ORDER BY t.created_at DESC`
       ).all(uid);
       const transactions = rows.map((tx) => {
         let counterparty = tx.counterparty_id;
@@ -89,6 +101,8 @@ export function createFamilyRouter(db: Database.Database): Router {
           currency: tx.currency,
           status: tx.status,
           paypalRef: tx.paypal_ref,
+          paypalStatus: paypalStatusByTransaction.get(tx.id),
+          approvalStatus: tx.approval_status,
         };
       });
       res.status(200).json({ success: true, transactions });

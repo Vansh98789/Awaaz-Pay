@@ -20,6 +20,7 @@ interface ActivityItem {
   source: string;
   reference?: string;
   paypalStatus?: string;
+  approvalStatus?: string | null;
 }
 
 interface ActivityScreenProps {
@@ -109,9 +110,9 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({ lang = 'en-IN', 
     speak(text, { lang });
   }, [lang, speak]);
 
-  const loadActivity = useCallback(async (announce = false) => {
+  const loadActivity = useCallback(async (announce = false, background = false) => {
     try {
-      setLoading(true);
+      if (!background) setLoading(true);
       const response = await fetch('/api/family/wallet-activity');
       if (!response.ok) throw new Error('Activity could not be loaded.');
       const data = await response.json();
@@ -128,18 +129,19 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({ lang = 'en-IN', 
           source: synthetic ? 'Awaaz Pay fallback · no PayPal transfer' : paypalRef ? 'PayPal Sandbox record' : 'Awaaz Pay activity record',
           reference: paypalRef || undefined,
           paypalStatus: tx.paypalStatus,
+          approvalStatus: tx.approvalStatus,
         };
       });
       setItems(mapped);
       setLoadError(false);
-      setSelectedIndex(0);
+      if (!background) setSelectedIndex(0);
       if (announce) say(lang === 'hi-IN' ? 'Hisaab refresh ho gaya.' : 'Recent activity has been refreshed.');
     } catch {
       setItems([]);
       setLoadError(true);
       if (announce) say(lang === 'hi-IN' ? 'Hisaab abhi load nahi ho saka. Thodi der baad dobara boliye.' : 'I could not load activity just now. Please try again in a moment.');
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [lang, say]);
 
@@ -149,9 +151,9 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({ lang = 'en-IN', 
       : (lang === 'hi-IN' ? 'bheje' : 'sent to');
     const amount = new Intl.NumberFormat(lang, { style: 'currency', currency: 'USD' }).format(item.amount);
     if (lang === 'hi-IN') {
-      return `${total > 1 ? `Len-den ${index + 1} mein, ` : ''}${item.counterparty} se ${amount} ${direction}, ${spokenDate(item.time, lang)}. Status ${item.status}. ${item.paypalStatus ? `PayPal status ${item.paypalStatus}.` : ''} ${item.source}.`;
+      return `${total > 1 ? `Len-den ${index + 1} mein, ` : ''}${item.counterparty} se ${amount} ${direction}, ${spokenDate(item.time, lang)}. Status ${item.status}.${item.approvalStatus === 'approved' ? ' Family ne payment approve kar diya.' : ''} ${item.paypalStatus ? `PayPal status ${item.paypalStatus}.` : ''} ${item.source}.`;
     }
-    return `${total > 1 ? `Transaction ${index + 1}: ` : ''}${direction === 'received from' ? `Received ${amount} from` : `Sent ${amount} to`} ${item.counterparty}, ${spokenDate(item.time, lang)}. Status: ${item.status}.${item.paypalStatus ? ` PayPal reports ${item.paypalStatus}.` : ''} ${item.source}.`;
+    return `${total > 1 ? `Transaction ${index + 1}: ` : ''}${direction === 'received from' ? `Received ${amount} from` : `Sent ${amount} to`} ${item.counterparty}, ${spokenDate(item.time, lang)}. Status: ${item.status}.${item.approvalStatus === 'approved' ? ' Your family approved this payment.' : ''}${item.paypalStatus ? ` PayPal reports ${item.paypalStatus}.` : ''} ${item.source}.`;
   }, [lang]);
 
   const handleVoiceCommand = useCallback(async (rawText: string) => {
@@ -404,6 +406,12 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({ lang = 'en-IN', 
   useEffect(() => { void loadActivity(); }, [loadActivity]);
 
   useEffect(() => {
+    if (!items.some((item) => ['awaiting approval', 'confirmed', 'processing'].includes(item.status.toLowerCase()))) return undefined;
+    const timer = window.setInterval(() => { void loadActivity(false, true); }, 15000);
+    return () => window.clearInterval(timer);
+  }, [items, loadActivity]);
+
+  useEffect(() => {
     if (!initialVoiceRequest || loading || initialRequestHandledRef.current) return;
     initialRequestHandledRef.current = true;
     onInitialVoiceRequestHandled?.();
@@ -560,7 +568,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({ lang = 'en-IN', 
                 <BodyText size="large">{lang === 'hi-IN'
                   ? `${item.counterparty} ${item.direction === 'IN' ? 'se' : 'ko'} ${new Intl.NumberFormat(lang, { style: 'currency', currency: 'USD' }).format(item.amount)} ${item.direction === 'IN' ? 'mile' : 'bheje'}`
                   : `${item.direction === 'IN' ? 'Received' : 'Sent'} ${new Intl.NumberFormat(lang, { style: 'currency', currency: 'USD' }).format(item.amount)} ${item.direction === 'IN' ? 'from' : 'to'} ${item.counterparty}`}</BodyText>
-                <BodyText muted>{spokenDate(item.time, lang)} · {item.status} · {item.source}{item.paypalStatus ? ` · PayPal: ${item.paypalStatus}` : ''}</BodyText>
+                <BodyText muted>{spokenDate(item.time, lang)} · {item.status}{item.approvalStatus === 'approved' ? (lang === 'hi-IN' ? ' · परिवार ने मंज़ूर किया' : ' · Family approved') : ''} · {item.source}{item.paypalStatus ? ` · PayPal: ${item.paypalStatus}` : ''}</BodyText>
               </div>
             </li>
           ))}

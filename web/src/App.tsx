@@ -1128,9 +1128,7 @@ export const App: React.FC = () => {
     if (!pendingConfirmation.isPending || !pendingConfirmation.transactionId) return;
 
     let stopped = false;
-    let attempts = 0;
     const pollStatus = async () => {
-      attempts += 1;
       try {
         const res = await fetch(`/api/payments/${pendingConfirmation.transactionId}`, {
           credentials: 'include',
@@ -1144,6 +1142,7 @@ export const App: React.FC = () => {
           setPendingConfirmation((prev) => ({
             ...prev,
             isPending: false,
+            isApprovalPending: false,
             isSuccess: true,
             statusMessage: 'PayPal confirmed this sandbox payout.',
             paypalBatchId: tx.paypal_ref || prev.paypalBatchId,
@@ -1157,6 +1156,7 @@ export const App: React.FC = () => {
           setPendingConfirmation((prev) => ({
             ...prev,
             isPending: false,
+            isApprovalPending: false,
             isFailed: true,
             statusMessage: wasDenied
               ? 'Your family member denied this payment. No PayPal payout was sent.'
@@ -1174,34 +1174,35 @@ export const App: React.FC = () => {
           setPendingConfirmation((prev) => ({
             ...prev,
             isApprovalPending: true,
-            statusMessage: attempts >= 10
-              ? 'Family approval is still pending. No PayPal payout has been sent. Check Family Activity later; do not retry.'
-              : 'Waiting for family approval. No PayPal payout has been sent.',
+            statusMessage: 'Waiting for family approval. No PayPal payout has been sent.',
           }));
-          if (attempts >= 10) stopped = true;
-        } else if (tx.status === 'processing' && data.paypalStatus) {
+        } else if (tx.status === 'confirmed') {
           setPendingConfirmation((prev) => ({
             ...prev,
-            statusMessage: attempts >= 10
-              ? `PayPal reports ${data.paypalStatus}. Still not confirmed. Do not retry; check Recent Activity later.`
-              : `PayPal reports ${data.paypalStatus}. Do not retry this payment.`,
+            isApprovalPending: false,
+            statusMessage: 'Your family approved this payment. Awaaz Pay is sending it to PayPal Sandbox.',
           }));
-          if (attempts >= 10) stopped = true;
-        } else if (attempts >= 10) {
+        } else if (tx.status === 'processing') {
           setPendingConfirmation((prev) => ({
             ...prev,
-            statusMessage: 'PayPal still has not confirmed completion. Do not retry; check Recent Activity later.',
+            isApprovalPending: false,
+            statusMessage: data.approvalStatus === 'approved'
+              ? data.paypalStatus
+                ? `Your family approved this payment. PayPal reports ${data.paypalStatus}. Do not retry this payment.`
+                : 'Your family approved this payment. PayPal Sandbox is still processing it. Do not retry.'
+              : data.paypalStatus
+                ? `PayPal reports ${data.paypalStatus}. Do not retry this payment.`
+                : 'PayPal Sandbox is still processing this payment. Do not retry.',
           }));
-          stopped = true;
         }
       } catch {
-        if (attempts >= 10) stopped = true;
+        // Keep checking while the payment screen remains open; approval or PayPal status can change later.
       }
     };
 
     const timer = window.setInterval(() => {
       if (!stopped) void pollStatus();
-    }, 3000);
+    }, 5000);
     void pollStatus();
     return () => {
       stopped = true;
