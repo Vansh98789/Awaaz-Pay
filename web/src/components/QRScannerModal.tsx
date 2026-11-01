@@ -424,19 +424,21 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
               : (lang === 'hi-IN' ? 'बोलें' : 'Tap to speak')}
         </button>
         {scannerVoice.isListening && (
-          <BodyText role="status" aria-live="polite" style={{ marginTop: '0.5rem' }}>
-            {lang === 'hi-IN' ? 'सुन रही हूँ। Email se pay, dobara scan, ya scanner band boliye.' : 'Listening. Say “pay by email”, “scan again”, or “close scanner”.'}
-          </BodyText>
+          <div role="status" aria-live="polite" style={{ marginTop: '0.5rem' }}>
+            <BodyText>{lang === 'hi-IN' ? 'सुन रही हूँ। Email se pay, dobara scan, ya scanner band boliye.' : 'Listening. Say “pay by email”, “scan again”, or “close scanner”.'}</BodyText>
+          </div>
         )}
         {voiceMessage && (
-          <BodyText role="status" aria-live="polite" style={{ marginTop: '0.5rem' }}>{voiceMessage}</BodyText>
+          <div role="status" aria-live="polite" style={{ marginTop: '0.5rem' }}><BodyText>{voiceMessage}</BodyText></div>
         )}
         {!scannerVoice.isSupported && (
-          <BodyText role="status" aria-live="polite" muted style={{ marginTop: '0.5rem' }}>
-            {allowEmailRecipient
-              ? (lang === 'hi-IN' ? 'इस ब्राउज़र में बोलकर खोज उपलब्ध नहीं है। ईमेल बटन से पता टाइप करें।' : 'Voice input is unavailable in this browser. Use the email option to type the address.')
-              : (lang === 'hi-IN' ? 'इस ब्राउज़र में बोलकर कमांड उपलब्ध नहीं हैं।' : 'Voice commands are unavailable in this browser.')}
-          </BodyText>
+          <div role="status" aria-live="polite" style={{ marginTop: '0.5rem' }}>
+            <BodyText muted>
+              {allowEmailRecipient
+                ? (lang === 'hi-IN' ? 'इस ब्राउज़र में बोलकर खोज उपलब्ध नहीं है। ईमेल बटन से पता टाइप करें।' : 'Voice input is unavailable in this browser. Use the email option to type the address.')
+                : (lang === 'hi-IN' ? 'इस ब्राउज़र में बोलकर कमांड उपलब्ध नहीं हैं।' : 'Voice commands are unavailable in this browser.')}
+            </BodyText>
+          </div>
         )}
         {/* Prominent Spoken & Live Status Guidance */}
         {!emailEntryOpen && <div

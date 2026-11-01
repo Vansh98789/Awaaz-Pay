@@ -375,7 +375,7 @@ export const FamilyDashboardPage: React.FC<{ onLogout?: () => void }> = ({ onLog
           const s = params.value;
           const isDone = s === 'completed';
           const isFailed = s === 'failed' || s === 'cancelled';
-          const isPending = s === 'pending' || s === 'processing' || s === 'confirmed' || s === 'awaiting_approval';
+          const isPending = s === 'pending' || s === 'processing' || s === 'confirmed' || s === 'awaiting_approval' || s === 'unknown' || s === 'reconciling';
           const color = isDone ? 'var(--success)' : isFailed ? 'var(--danger)' : isPending ? 'var(--warning)' : 'var(--text-secondary)';
           return <span style={{ fontWeight: 600, color }}>{s}</span>;
         },

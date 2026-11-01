@@ -48,7 +48,31 @@ export async function runMigrations(db: Database): Promise<void> {
 
   await db.query('ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payout_request_id TEXT');
   await db.query('ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payout_receiver_email TEXT');
-  await db.query("UPDATE transactions SET payout_request_id = 'payout-' || id WHERE payout_request_id IS NULL");
+  const payoutRequestIdMigration = 'transaction_payout_request_ids_v1';
+  const payoutRequestIdMigrationDone = (await db.query<{ version: string }>(
+    'SELECT version FROM app_migrations WHERE version = $1', [payoutRequestIdMigration],
+  )).length > 0;
+  if (!payoutRequestIdMigrationDone) {
+    await db.query("UPDATE transactions SET payout_request_id = 'payout-' || id WHERE payout_request_id IS NULL");
+    await db.query('INSERT INTO app_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING', [payoutRequestIdMigration]);
+  }
+
+  // Older payout errors were all recorded as failed, including lost responses.
+  // Preserve those unreferenced payout records as unknown instead of permitting
+  // a fresh payout that could duplicate a transfer already accepted by PayPal.
+  const legacyAmbiguousPayouts = 'legacy_ambiguous_payouts_to_unknown_v1';
+  const legacyPayoutMigrationDone = (await db.query<{ version: string }>(
+    'SELECT version FROM app_migrations WHERE version = $1', [legacyAmbiguousPayouts],
+  )).length > 0;
+  if (!legacyPayoutMigrationDone) {
+    await db.query(`UPDATE transactions t SET status = 'unknown', payout_request_id = NULL
+      WHERE t.type = 'send_money' AND t.status = 'failed' AND t.paypal_ref IS NULL
+        AND EXISTS (
+          SELECT 1 FROM audit_events a
+          WHERE a.kind = 'payment_payout_failed' AND a.payload->>'transactionId' = t.id
+        )`);
+    await db.query('INSERT INTO app_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING', [legacyAmbiguousPayouts]);
+  }
 
   // Older deployed schemas had this ledger shape. Keep its old columns usable,
   // while the application now reads and writes the canonical signed delta.

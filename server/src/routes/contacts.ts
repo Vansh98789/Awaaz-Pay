@@ -13,6 +13,11 @@ import {
   upsertGuardian,
 } from '../db/repository.js';
 import type { ContactStatus } from '../db/types.js';
+import { requireFamilyAuth } from '../auth/familyAuth.js';
+
+function isDemoCoolingSkipped(): boolean {
+  return process.env.NODE_ENV !== 'production' && process.env.DEMO_SKIP_COOLING === 'true';
+}
 
 export function createContactsRouter(db: Database): Router {
   const router = Router();
@@ -20,7 +25,7 @@ export function createContactsRouter(db: Database): Router {
   // QR supplied recipient details are never promoted directly to trusted status.
   router.post('/scan', async (req: Request, res: Response) => {
     try {
-      const userId = req.body.userId || req.user?.id || 'user_meena';
+      const userId = req.user?.id || req.body.userId || 'user_meena';
       const displayName = typeof req.body.displayName === 'string' ? req.body.displayName.trim() : '';
       const paypalEmail = typeof req.body.paypalEmail === 'string' ? req.body.paypalEmail.trim() : '';
       if (!displayName || displayName.length > 80 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paypalEmail)) {
@@ -77,7 +82,7 @@ export function createContactsRouter(db: Database): Router {
   // 1. List contacts
   router.get('/', async (req: Request, res: Response) => {
     try {
-      const userId = (req.query.userId as string) || req.user?.id || 'user_meena';
+      const userId = req.user?.id || (req.query.userId as string) || 'user_meena';
       const contacts = await listContacts(db, userId);
       res.status(200).json({ contacts });
     } catch (err) {
@@ -88,7 +93,7 @@ export function createContactsRouter(db: Database): Router {
   // 2. Add contact (with cooling-off period)
   router.post('/', async (req: Request, res: Response) => {
     try {
-      const userId = req.body.userId || req.user?.id || 'user_meena';
+      const userId = req.user?.id || req.body.userId || 'user_meena';
       const { alias, displayName, paypalEmail, addedBy = 'guardian_ramesh' } = req.body;
 
       if (!alias || !displayName || !paypalEmail) {
@@ -97,7 +102,7 @@ export function createContactsRouter(db: Database): Router {
       }
 
       const now = new Date();
-      const skipCooling = process.env.DEMO_SKIP_COOLING === 'true';
+      const skipCooling = isDemoCoolingSkipped();
       const coolingHours = parseInt(process.env.CONTACT_COOLING_OFF_HOURS || '24', 10);
 
       const status: ContactStatus = skipCooling ? 'active' : 'cooling_off';
@@ -149,7 +154,7 @@ export function createContactsRouter(db: Database): Router {
   });
 
   // 3. Emergency: Instant activation by guardian
-  router.post('/:id/activate', async (req: Request, res: Response) => {
+  router.post('/:id/activate', requireFamilyAuth, async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       if (!id) {
@@ -183,7 +188,7 @@ export function createContactsRouter(db: Database): Router {
   });
 
   // 4. Block contact during cooling off
-  router.post('/:id/block', async (req: Request, res: Response) => {
+  router.post('/:id/block', requireFamilyAuth, async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       if (!id) {
@@ -217,7 +222,7 @@ export function createContactsRouter(db: Database): Router {
   });
 
   // 5. Delete contact
-  router.delete('/:id', async (req: Request, res: Response) => {
+  router.delete('/:id', requireFamilyAuth, async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
       if (!id) {
@@ -277,7 +282,7 @@ export function createOnboardingRouter(db: Database): Router {
       });
 
       // Add contacts
-      const skipCooling = process.env.DEMO_SKIP_COOLING === 'true';
+      const skipCooling = isDemoCoolingSkipped();
       const coolingHours = parseInt(process.env.CONTACT_COOLING_OFF_HOURS || '24', 10);
       const now = new Date();
 

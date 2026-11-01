@@ -21,6 +21,7 @@ interface ConfirmPaymentProps {
   isProcessing?: boolean;
   isSuccess?: boolean;
   isPending?: boolean;
+  isUnknown?: boolean;
   isApprovalPending?: boolean;
   isFailed?: boolean;
   statusMessage?: string;
@@ -30,6 +31,7 @@ interface ConfirmPaymentProps {
   lang?: 'hi-IN' | 'en-IN';
   isListening?: boolean;
   onToggleMic?: () => void;
+  onCheckStatus?: () => void;
 }
 
 export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
@@ -43,6 +45,7 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
   isProcessing = false,
   isSuccess = false,
   isPending = false,
+  isUnknown = false,
   isApprovalPending = false,
   isFailed = false,
   statusMessage,
@@ -52,6 +55,7 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
   lang = 'en-IN',
   isListening = false,
   onToggleMic,
+  onCheckStatus,
 }) => {
   const announcedRef = useRef(false);
 
@@ -165,13 +169,22 @@ export const ConfirmPaymentScreen: React.FC<ConfirmPaymentProps> = ({
   if (isPending) {
     return (
       <Page
-        headerContent={<><DotWordmark size={140} /><Headline level={1}>{isApprovalPending ? 'Guardian approval required' : 'Payment not confirmed yet'}</Headline></>}
+        headerContent={<><DotWordmark size={140} /><Headline level={1}>{isApprovalPending ? 'Guardian approval required' : isUnknown ? 'Checking payment status' : 'Payment not confirmed yet'}</Headline></>}
       >
-        <StatusBanner variant="warning" label={isApprovalPending ? 'No payout sent yet' : 'PayPal Sandbox status pending'}>
+        <StatusBanner variant="warning" label={isApprovalPending ? 'No payout sent yet' : isUnknown ? 'Payment outcome unknown' : 'PayPal Sandbox status pending'}>
           {statusMessage || (isApprovalPending
             ? 'Wait for guardian approval before this payment is sent.'
-            : 'PayPal has not confirmed completion yet. Do not retry this payment.')}
+            : isUnknown
+              ? 'PayPal’s response was interrupted. Do not start another payment while we check this one.'
+              : 'PayPal has not confirmed completion yet. Do not retry this payment.')}
         </StatusBanner>
+        {isUnknown && onCheckStatus && (
+          <button type="button" onClick={onCheckStatus} disabled={isProcessing} style={{ minHeight: 64, width: '100%', padding: '0.8rem 1rem', borderRadius: 'var(--radius-pill)', border: '2px solid var(--accent)', background: 'var(--accent)', color: 'var(--accent-text)', font: 'inherit', fontWeight: 750, cursor: isProcessing ? 'wait' : 'pointer', opacity: isProcessing ? 0.7 : 1 }}>
+            {isProcessing
+              ? (lang === 'hi-IN' ? 'जाँच रहे हैं…' : 'Checking…')
+              : (lang === 'hi-IN' ? 'पेमेंट का स्टेटस जाँचें' : 'Check payment status')}
+          </button>
+        )}
         <BodyText size="large">This is a sandbox test. No real money is moved.</BodyText>
         {paypalBatchId && <BodyText muted>PayPal payout batch: {paypalBatchId}</BodyText>}
         {transactionId && <BodyText muted>Transaction ID: {transactionId}</BodyText>}

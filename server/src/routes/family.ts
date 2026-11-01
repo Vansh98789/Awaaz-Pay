@@ -202,7 +202,7 @@ export function createFamilyRouter(db: Database): Router {
       }
 
       const now = new Date();
-      const skipCooling = process.env.DEMO_SKIP_COOLING === 'true';
+      const skipCooling = process.env.NODE_ENV !== 'production' && process.env.DEMO_SKIP_COOLING === 'true';
       const coolingHoursRaw = Number.parseInt(process.env.CONTACT_COOLING_OFF_HOURS || '24', 10);
       const coolingHours = Number.isFinite(coolingHoursRaw) ? Math.max(1, Math.min(coolingHoursRaw, 168)) : 24;
       const status: ContactStatus = skipCooling ? 'active' : 'cooling_off';
@@ -309,7 +309,9 @@ export function createFamilyRouter(db: Database): Router {
           tx.decision === 'block' ||
           tx.decision === 'need_guardian_approval' ||
           tx.risk_score >= 0.5 ||
-          tx.status === 'failed';
+          tx.status === 'failed' ||
+          tx.status === 'unknown' ||
+          tx.status === 'reconciling';
 
         return {
           id: tx.id,

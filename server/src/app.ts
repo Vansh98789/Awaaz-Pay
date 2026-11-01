@@ -50,13 +50,13 @@ export function createApp(db?: Database): Express {
   app.use('/api/auth', createAuthRouter(database));
   app.use('/api/agent', createAgentRouter());
   app.use('/api/approvals', createApprovalsRouter(database));
-  app.use('/api/contacts', createContactsRouter(database));
+  app.use('/api/contacts', requireAuth, createContactsRouter(database));
   app.use('/api/onboarding', createOnboardingRouter(database));
   app.use('/api/merchant', createMerchantRouter(database));
   app.use('/api', createMerchantRouter(database));
   app.use('/api/family', createFamilyRouter(database));
   app.use('/api/webhooks', createWebhooksRouter(database));
-  app.use('/api/notifications', createNotificationsRouter(database));
+  app.use('/api/notifications', requireAuth, createNotificationsRouter(database));
   app.use('/api/payments', requireAuth, createPaymentsRouter(database));
   app.use('/api', createConverseRouter(database));
 

@@ -69,6 +69,7 @@ interface PendingConfirmationState {
   isProcessing?: boolean;
   isSuccess?: boolean;
   isPending?: boolean;
+  isUnknown?: boolean;
   isApprovalPending?: boolean;
   isFailed?: boolean;
   statusMessage?: string;
@@ -957,12 +958,14 @@ export const App: React.FC = () => {
       ].filter(Boolean).join(' ');
       const completed = outcome.status === 'completed';
       const approvalPending = outcome.status === 'awaiting_approval' || outcome.status === 'need_guardian_approval';
-      const pending = outcome.status === 'processing' || approvalPending;
+      const unknown = outcome.status === 'unknown';
+      const pending = outcome.status === 'processing' || unknown || approvalPending;
       setPendingConfirmation((prev) => ({
         ...prev,
         isProcessing: false,
         isSuccess: completed,
         isPending: pending,
+        isUnknown: unknown,
         isApprovalPending: approvalPending,
         isFailed: !completed && !pending,
         statusMessage,
@@ -974,6 +977,8 @@ export const App: React.FC = () => {
       else if (!pending) triggerHaptic('error');
       const spokenStatus = completed
         ? `${lang === 'hi-IN' ? 'PayPal Sandbox test payment safal raha. Asli paise nahi bheje gaye.' : 'PayPal Sandbox test payment completed. No real money was moved.'} ${statusMessage}`
+        : unknown
+          ? `${lang === 'hi-IN' ? 'Payment ka result abhi pata nahi hai. Dobara payment na bhejein.' : 'The payment result is unknown. Do not send another payment.'} ${statusMessage}`
         : pending
           ? `${lang === 'hi-IN' ? 'PayPal Sandbox payment abhi confirm nahi hua. Dobara payment na karein.' : 'PayPal Sandbox has not confirmed this payment yet. Do not retry it.'} ${statusMessage}`
           : `${lang === 'hi-IN' ? 'PayPal Sandbox payment safal nahi hua. Dobara bhejne se pehle PayPal activity check karein.' : 'PayPal Sandbox did not confirm the payment. Check PayPal activity before retrying.'} ${statusMessage}`;
@@ -983,12 +988,58 @@ export const App: React.FC = () => {
       setPendingConfirmation((prev) => ({
         ...prev,
         isProcessing: false,
-        isFailed: true,
-        statusMessage: (err as Error).message || (lang === 'hi-IN'
-          ? 'Payment ka result confirm nahi hua. Dobara bhejne se pehle PayPal activity check karein.'
-          : 'The payment result could not be confirmed. Check PayPal activity before retrying.'),
+        isPending: true,
+        isUnknown: true,
+        isFailed: false,
+        statusMessage: 'The connection ended before the payment result arrived. Do not send another payment. Check this payment status.',
       }));
-      speak((err as Error).message || 'Payment did not complete.', { lang });
+      speak(lang === 'hi-IN'
+        ? 'Payment ka result abhi pata nahi hai. Dobara payment na bhejein. Is payment ka status check karein.'
+        : 'The payment result is unknown. Do not send another payment. Check this payment status.', { lang });
+    }
+  };
+
+  const handleReconcilePayout = async () => {
+    const transactionId = pendingConfirmation.transactionId;
+    if (!transactionId || pendingConfirmation.isProcessing) return;
+    setPendingConfirmation((prev) => ({ ...prev, isProcessing: true, statusMessage: 'Checking the original PayPal payout. Do not start another payment.' }));
+    try {
+      const response = await fetch(`/api/payments/${transactionId}/reconcile`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const outcome = await response.json();
+      if (!response.ok) throw new Error(outcome.error || 'Could not check this payment status.');
+      const completed = outcome.status === 'completed';
+      const failed = outcome.status === 'failed';
+      const unknown = outcome.status === 'unknown';
+      const canConfirm = outcome.status === 'pending_confirmation';
+      setPendingConfirmation((prev) => ({
+        ...prev,
+        isProcessing: false,
+        isPending: !completed && !failed && !canConfirm,
+        isUnknown: unknown,
+        isFailed: failed,
+        isSuccess: completed,
+        statusMessage: outcome.message || outcome.spoken_message || (completed
+          ? 'PayPal confirmed this payment.'
+          : failed
+            ? 'PayPal confirmed that this payment did not complete.'
+            : 'PayPal is still checking the original payment. Do not send it again.'),
+        paypalBatchId: outcome.batchId || prev.paypalBatchId,
+      }));
+      speak(outcome.spoken_message || outcome.message || 'Payment status checked. Do not send another payment.', { lang });
+    } catch (err) {
+      setPendingConfirmation((prev) => ({
+        ...prev,
+        isProcessing: false,
+        isPending: true,
+        isUnknown: true,
+        statusMessage: (err as Error).message || 'Payment status is still unknown. Do not send it again.',
+      }));
+      speak('The payment status is still unknown. Do not send another payment.', { lang });
     }
   };
 
@@ -1141,6 +1192,7 @@ export const App: React.FC = () => {
             isPending: false,
             isApprovalPending: false,
             isSuccess: true,
+            isUnknown: false,
             statusMessage: 'PayPal confirmed this sandbox payout.',
             paypalBatchId: tx.paypal_ref || prev.paypalBatchId,
           }));
@@ -1148,6 +1200,14 @@ export const App: React.FC = () => {
             ? 'PayPal Sandbox ne payment confirm kar diya. Asli paise nahi bheje gaye.'
             : 'PayPal Sandbox confirmed the test payment. No real money was moved.', { lang });
           stopped = true;
+        } else if (tx.status === 'unknown' || tx.status === 'reconciling') {
+          setPendingConfirmation((prev) => ({
+            ...prev,
+            isPending: true,
+            isUnknown: true,
+            isApprovalPending: false,
+            statusMessage: 'PayPal has not confirmed the outcome. Do not send another payment. Use Check status to reconcile the original request.',
+          }));
         } else if (tx.status === 'failed') {
           const wasDenied = data.approvalStatus === 'denied';
           setPendingConfirmation((prev) => ({
@@ -1155,6 +1215,7 @@ export const App: React.FC = () => {
             isPending: false,
             isApprovalPending: false,
             isFailed: true,
+            isUnknown: false,
             statusMessage: wasDenied
               ? 'Your family member denied this payment. No PayPal payout was sent.'
               : 'PayPal did not complete the payout. Check PayPal activity before retrying.',
@@ -1183,6 +1244,7 @@ export const App: React.FC = () => {
           setPendingConfirmation((prev) => ({
             ...prev,
             isApprovalPending: false,
+            isUnknown: false,
             statusMessage: data.approvalStatus === 'approved'
               ? data.paypalStatus
                 ? `Your family approved this payment. PayPal reports ${data.paypalStatus}. Do not retry this payment.`
@@ -1307,6 +1369,7 @@ export const App: React.FC = () => {
         isProcessing={pendingConfirmation.isProcessing}
         isSuccess={pendingConfirmation.isSuccess}
         isPending={pendingConfirmation.isPending}
+        isUnknown={pendingConfirmation.isUnknown}
         isApprovalPending={pendingConfirmation.isApprovalPending}
         isFailed={pendingConfirmation.isFailed}
         statusMessage={pendingConfirmation.statusMessage}
@@ -1316,6 +1379,7 @@ export const App: React.FC = () => {
         lang={lang}
         isListening={isListening}
         onToggleMic={toggleListening}
+        onCheckStatus={handleReconcilePayout}
       />
     );
   }

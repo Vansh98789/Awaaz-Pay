@@ -14,7 +14,7 @@ declare global {
 }
 
 export function isDemoAuthBypass(): boolean {
-  return process.env.DEMO_AUTH_BYPASS === 'true';
+  return process.env.NODE_ENV !== 'production' && process.env.DEMO_AUTH_BYPASS === 'true';
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {

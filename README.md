@@ -131,9 +131,9 @@ Create a `.env` file from `.env.example` and fill in the values:
 | `GEMINI_MODEL` | Gemini model identifier | `gemini-1.5-flash` |
 | `GROQ_API_KEY` | Groq API key (optional fallback) | *(from Groq console)* |
 | `GROQ_MODEL` | Groq model identifier | `llama3-70b-8192` |
-| `LLM_DEMO_CACHE` | Use cached LLM responses for demo | `true` |
-| `DEMO_SKIP_COOLING` | Skip contact cooling-off period in demo | `true` |
-| `DEMO_AUTH_BYPASS` | Bypass WebAuthn authentication in demo | `true` |
+| `LLM_DEMO_CACHE` | Use cached LLM responses for demo; production rejects `true` | `false` |
+| `DEMO_SKIP_COOLING` | Skip contact cooling-off period in local demos only; production rejects `true` | `false` |
+| `DEMO_AUTH_BYPASS` | Bypass WebAuthn in local demos only; production rejects `true` | `false` |
 | `CONTACT_COOLING_OFF_HOURS` | Hours before a new contact becomes trusted | `24` |
 | `DATABASE_URL` | Neon PostgreSQL connection string | Required |
 
@@ -167,6 +167,8 @@ Create a `.env` file from `.env.example` and fill in the values:
 > DEMO_SKIP_COOLING=true
 > LLM_DEMO_CACHE=true
 > ```
+>
+> Demo flags are for local demos only. The server refuses to start in production if authentication bypass, cooling-off bypass, or cached demo responses are enabled.
 
 ---
 

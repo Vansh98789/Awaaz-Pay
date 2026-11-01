@@ -5,7 +5,7 @@ import type { PayoutItem, PayoutBatchResponse } from './types.js';
 export async function createPayoutBatch(
   items: PayoutItem[],
   emailSubject = 'Payment from Awaaz Pay',
-  idempotencyKey = crypto.randomUUID(),
+  idempotencyKey: string = crypto.randomUUID(),
 ): Promise<PayoutBatchResponse> {
   return ppRequest<PayoutBatchResponse>('POST', '/v1/payments/payouts', {
     idempotencyKey,

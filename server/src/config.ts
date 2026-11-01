@@ -32,7 +32,19 @@ const envSchema = z.object({
   // Keep this configured model aligned with Groq's active model catalog.
   GROQ_MODEL: z.string().optional(),
   LLM_DEMO_CACHE: z.enum(['true', 'false']).default('false'),
+  DEMO_AUTH_BYPASS: z.enum(['true', 'false']).default('false'),
+  DEMO_SKIP_COOLING: z.enum(['true', 'false']).default('false'),
   DATABASE_URL: z.string().url(),
+}).superRefine((env, ctx) => {
+  if (env.NODE_ENV === 'production' && env.DEMO_AUTH_BYPASS === 'true') {
+    ctx.addIssue({ code: 'custom', path: ['DEMO_AUTH_BYPASS'], message: 'Must be false in production; demo authentication bypass is not safe for real use.' });
+  }
+  if (env.NODE_ENV === 'production' && env.DEMO_SKIP_COOLING === 'true') {
+    ctx.addIssue({ code: 'custom', path: ['DEMO_SKIP_COOLING'], message: 'Must be false in production; new contacts must complete the cooling-off period.' });
+  }
+  if (env.NODE_ENV === 'production' && env.LLM_DEMO_CACHE === 'true') {
+    ctx.addIssue({ code: 'custom', path: ['LLM_DEMO_CACHE'], message: 'Must be false in production; cached demo responses are not suitable for real use.' });
+  }
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

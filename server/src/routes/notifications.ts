@@ -11,7 +11,7 @@ export function createNotificationsRouter(db: Database): Router {
 
   router.get('/pending', async (req: Request, res: Response) => {
     try {
-      const userId = (req.query.userId as string) || 'user_meena';
+      const userId = req.user?.id || (req.query.userId as string) || 'user_meena';
       const notifications = await getPendingNotifications(db, userId);
       res.status(200).json({ notifications });
     } catch (err) {
@@ -22,7 +22,9 @@ export function createNotificationsRouter(db: Database): Router {
   router.post('/:id/delivered', async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-      await markNotificationDelivered(db, id);
+      const userId = req.user?.id;
+      if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+      await markNotificationDelivered(db, id, userId);
       res.status(200).json({ success: true, id });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -32,10 +34,12 @@ export function createNotificationsRouter(db: Database): Router {
   router.post('/mark-delivered', async (req: Request, res: Response) => {
     try {
       const { id, ids } = req.body;
+      const userId = req.user?.id;
+      if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
       if (id) {
-        await markNotificationDelivered(db, id);
+        await markNotificationDelivered(db, id, userId);
       } else if (Array.isArray(ids)) {
-        await markNotificationsDelivered(db, ids);
+        await markNotificationsDelivered(db, ids, userId);
       }
       res.status(200).json({ success: true });
     } catch (err) {

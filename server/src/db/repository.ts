@@ -107,12 +107,12 @@ export async function getPendingNotifications(db: Database, userId: string): Pro
   return rows(db, 'SELECT * FROM notifications WHERE user_id = $1 AND delivered = 0 ORDER BY created_at ASC', [userId]);
 }
 
-export async function markNotificationDelivered(db: Database, id: string): Promise<void> {
-  await db.query('UPDATE notifications SET delivered = 1 WHERE id = $1', [id]);
+export async function markNotificationDelivered(db: Database, id: string, userId: string): Promise<void> {
+  await db.query('UPDATE notifications SET delivered = 1 WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
-export async function markNotificationsDelivered(db: Database, ids: string[]): Promise<void> {
-  if (ids.length) await db.query('UPDATE notifications SET delivered = 1 WHERE id = ANY($1::text[])', [ids]);
+export async function markNotificationsDelivered(db: Database, ids: string[], userId: string): Promise<void> {
+  if (ids.length) await db.query('UPDATE notifications SET delivered = 1 WHERE id = ANY($1::text[]) AND user_id = $2', [ids, userId]);
 }
 
 export async function savePasskey(db: Database, passkey: import('./types.js').Passkey): Promise<import('./types.js').Passkey> {

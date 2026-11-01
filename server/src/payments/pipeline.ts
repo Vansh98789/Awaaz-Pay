@@ -77,6 +77,17 @@ export async function preparePayment(
   }
 
   const resolvedPayee = await resolvePayee(db, userId, payee);
+  const unresolvedPayout = (await db.query<{ id: string }>(
+    `SELECT id FROM transactions
+     WHERE user_id = $1 AND type = 'send_money'
+       AND (status IN ('unknown', 'reconciling') OR (status = 'processing' AND paypal_ref IS NULL))
+     ORDER BY created_at DESC LIMIT 1`,
+    [userId],
+  ))[0];
+  if (unresolvedPayout) {
+    throw new Error(`Payment ${unresolvedPayout.id} has an unknown PayPal outcome. Check that payment status before starting another payout.`);
+  }
+
   const { context } = await buildPaymentContext(
     db,
     user,
@@ -176,7 +187,7 @@ export async function refreshPayoutStatus(
   if (tx.status === 'unknown' || tx.status === 'reconciling') return { status: 'unknown' };
   if (tx.status !== 'processing') return { status: tx.status };
   if (!tx.paypal_ref) {
-    await updateTransactionStatus(db, tx.id, 'unknown');
+    await db.query("UPDATE transactions SET status = 'unknown' WHERE id = $1 AND status = 'processing' AND paypal_ref IS NULL", [tx.id]);
     await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_payout_unknown',
@@ -251,32 +262,33 @@ export async function reconcilePayoutStatus(
   if (tx.status === 'completed' || tx.status === 'failed') {
     return { status: tx.status, transactionId: tx.id, batchId: tx.paypal_ref || undefined, alreadyPaid: tx.status === 'completed', httpStatus: 200 };
   }
+  if (tx.status === 'pending_confirmation') {
+    return {
+      status: 'pending_confirmation', transactionId: tx.id,
+      message: 'The payout request never started. Confirm this payment again only if you still want to pay this recipient.',
+      httpStatus: 200,
+    };
+  }
   if (tx.status === 'processing' && !tx.paypal_ref) {
-    await updateTransactionStatus(db, tx.id, 'unknown');
+    await db.query("UPDATE transactions SET status = 'unknown' WHERE id = $1 AND status = 'processing' AND paypal_ref IS NULL", [tx.id]);
   }
 
-  const claim = (await db.query<{ id: string }>(
-    `UPDATE transactions SET status = 'reconciling'
-     WHERE id = $1 AND status = 'unknown'
-     RETURNING id`,
-    [tx.id],
-  ))[0];
-  if (!claim) {
-    const current = await getTransactionById(db, tx.id);
+  const current = await getTransactionById(db, tx.id);
+  if (current?.status !== 'unknown') {
     if (current?.status === 'processing' && current.paypal_ref) {
       const refreshed = await refreshPayoutStatus(db, tx.id);
       return { status: refreshed.status || 'processing', transactionId: tx.id, batchId: current.paypal_ref, paypalStatus: refreshed.paypalStatus, httpStatus: 202 };
     }
     return {
       status: 'unknown', transactionId: tx.id,
-      message: 'The original payout is still being reconciled. Do not create another payment.',
-      spoken_message: 'The original payment is still being checked. Do not send another payment.',
+      message: 'The original payout status is not ready to reconcile. Do not create another payment.',
+      spoken_message: 'The original payment status is not ready to check. Do not send another payment.',
       httpStatus: 202,
     };
   }
 
   if (!tx.payout_request_id || !tx.payout_receiver_email) {
-    await updateTransactionStatus(db, tx.id, 'unknown');
+    await db.query("UPDATE transactions SET status = 'unknown' WHERE id = $1 AND status = 'unknown'", [tx.id]);
     return {
       status: 'unknown', transactionId: tx.id,
       message: 'The original payout details are incomplete. Contact support before taking further action.',
@@ -295,7 +307,7 @@ export async function reconcilePayoutStatus(
     const batchId = replay.batch_header?.payout_batch_id || '';
     if (!batchId) throw new Error('PayPal has not returned the original payout batch ID yet.');
 
-    await updateTransactionStatus(db, tx.id, 'processing', batchId);
+    await db.query("UPDATE transactions SET status = 'processing', paypal_ref = $2 WHERE id = $1 AND status IN ('unknown', 'reconciling', 'processing')", [tx.id, batchId]);
     const refreshed = await refreshPayoutStatus(db, tx.id);
     if (refreshed.status === 'completed' || refreshed.status === 'failed') {
       return { status: refreshed.status, transactionId: tx.id, batchId, paypalStatus: refreshed.paypalStatus, httpStatus: 200 };
@@ -307,7 +319,7 @@ export async function reconcilePayoutStatus(
       httpStatus: 202,
     };
   } catch (err) {
-    await updateTransactionStatus(db, tx.id, 'unknown');
+    await db.query("UPDATE transactions SET status = 'unknown' WHERE id = $1 AND status = 'unknown'", [tx.id]);
     await writeAudit(db, {
       user_id: tx.user_id,
       kind: 'payment_payout_reconciliation_pending',
@@ -602,7 +614,6 @@ export async function confirmPayment(
     }
 
     if (batchStatus !== 'SUCCESS') {
-      await updateTransactionStatus(db, tx.id, 'processing', batchId);
       await writeAudit(db, {
         user_id: tx.user_id,
         kind: 'payment_payout_pending',
@@ -625,23 +636,41 @@ export async function confirmPayment(
       && err.status >= 400 && err.status < 500
       && !/duplicate|sender_batch_id/i.test(err.body);
     const finalStatus = payoutRequestStarted && !definiteRejection ? 'unknown' : 'failed';
-    await updateTransactionStatus(db, tx.id, finalStatus, batchId || undefined);
+    if (finalStatus === 'unknown') {
+      if (batchId) {
+        await db.query("UPDATE transactions SET status = 'processing', paypal_ref = $2 WHERE id = $1 AND status = 'processing'", [tx.id, batchId]);
+      } else {
+        await db.query("UPDATE transactions SET status = 'unknown' WHERE id = $1 AND status = 'processing' AND paypal_ref IS NULL", [tx.id]);
+      }
+    } else {
+      await db.query("UPDATE transactions SET status = 'failed' WHERE id = $1 AND status = 'processing' AND paypal_ref IS NULL", [tx.id]);
+    }
+    const current = await getTransactionById(db, tx.id);
+    if (current?.status === 'completed') {
+      return { status: 'completed', transactionId: tx.id, batchId: current.paypal_ref || undefined, alreadyPaid: true, httpStatus: 200 };
+    }
+    if (current?.status === 'failed') {
+      return { status: 'failed', transactionId: tx.id, batchId: current.paypal_ref || undefined, error: `Payout dispatch failed: ${errMsg}`, httpStatus: 200 };
+    }
+    const responseStatus = current?.status === 'processing' ? 'processing' : finalStatus;
     await writeAudit(db, {
       user_id: tx.user_id,
-      kind: finalStatus === 'unknown' ? 'payment_payout_unknown' : 'payment_payout_failed',
+      kind: responseStatus === 'unknown' ? 'payment_payout_unknown' : responseStatus === 'processing' ? 'payment_payout_pending' : 'payment_payout_failed',
       payload: JSON.stringify({ transactionId: tx.id, batchId: batchId || undefined, error: errMsg, payoutRequestId: claim.payout_request_id }),
     });
 
     return {
-      status: finalStatus,
+      status: responseStatus,
       transactionId: tx.id,
       error: `Payout dispatch failed: ${errMsg}`,
-      spoken_message: finalStatus === 'unknown'
+      spoken_message: responseStatus === 'unknown'
         ? 'PayPal may have received this payout, but I could not confirm the result. Do not send it again. Check payment status first.'
+        : responseStatus === 'processing'
+          ? 'PayPal has the original payout and is processing it. Do not send it again.'
         : insufficientFunds
         ? 'The PayPal Sandbox sender account does not have enough available funds for this payout.'
         : 'PayPal rejected this payout. No payment was sent.',
-      httpStatus: finalStatus === 'unknown' ? 202 : 500,
+      httpStatus: responseStatus === 'unknown' || responseStatus === 'processing' ? 202 : 500,
     };
   }
 
