@@ -30,7 +30,10 @@ export async function resolvePayee(
      AND (LOWER(alias) = $2 OR LOWER(display_name) = $3 OR LOWER(paypal_email) = $4) LIMIT 1`,
     [userId, q, q, q]))[0];
 
-  const vegetableSeller = !contact && /\b(vegetable|veggie|produce)\b.*\b(vendor|seller|shopkeeper)\b|\b(vendor|seller|shopkeeper)\b.*\b(vegetable|veggie|produce)\b/i.test(q)
+  const normalizedQuery = q.replace(/[\s_-]+/g, '');
+  const vegetableSellerQuery = /\b(vegetable|veggie|produce)\b.*\b(vendor|seller|shopkeeper)\b|\b(vendor|seller|shopkeeper)\b.*\b(vegetable|veggie|produce)\b/i.test(q)
+    || /^(sabzi|sabji)wala$/i.test(normalizedQuery);
+  const vegetableSeller = !contact && vegetableSellerQuery
     ? (await db.query<Contact>(
       `SELECT * FROM contacts WHERE user_id = $1
        AND (LOWER(alias) LIKE '%sabzi%' OR LOWER(alias) LIKE '%sabji%'

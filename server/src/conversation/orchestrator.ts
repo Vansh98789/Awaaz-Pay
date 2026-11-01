@@ -89,7 +89,7 @@ export async function processConversation(
     ...contactsList.map((c) => c.alias),
     ...contactsList.map((c) => c.display_name),
     ...(contactsList.some((c) => /sabz[iy]|sabji/i.test(`${c.alias} ${c.display_name}`))
-      ? ['vegetable vendor', 'vegetable seller', 'veggie vendor', 'veggie seller']
+      ? ['vegetable vendor', 'vegetable seller', 'veggie vendor', 'veggie seller', 'sabjiwala', 'sabji wala', 'sabziwala', 'sabzi wala']
       : []),
     ...merchantsList,
   ];
