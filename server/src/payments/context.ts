@@ -30,14 +30,24 @@ export async function resolvePayee(
      AND (LOWER(alias) = $2 OR LOWER(display_name) = $3 OR LOWER(paypal_email) = $4) LIMIT 1`,
     [userId, q, q, q]))[0];
 
-  if (contact) {
+  const vegetableSeller = !contact && /\b(vegetable|veggie|produce)\b.*\b(vendor|seller|shopkeeper)\b|\b(vendor|seller|shopkeeper)\b.*\b(vegetable|veggie|produce)\b/i.test(q)
+    ? (await db.query<Contact>(
+      `SELECT * FROM contacts WHERE user_id = $1
+       AND (LOWER(alias) LIKE '%sabzi%' OR LOWER(alias) LIKE '%sabji%'
+         OR LOWER(display_name) LIKE '%sabzi%' OR LOWER(display_name) LIKE '%sabji%')
+       ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END LIMIT 1`,
+      [userId]))[0]
+    : undefined;
+  const matchedContact = contact || vegetableSeller;
+
+  if (matchedContact) {
     return {
       payeeType: 'trusted_contact',
       counterpartyType: 'contact',
-      counterpartyId: contact.id,
-      displayName: contact.display_name,
-      email: contact.paypal_email,
-      contact,
+      counterpartyId: matchedContact.id,
+      displayName: matchedContact.display_name,
+      email: matchedContact.paypal_email,
+      contact: matchedContact,
     };
   }
 

@@ -51,7 +51,13 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   const [submittingEmail, setSubmittingEmail] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState('');
   const [retryCounter, setRetryCounter] = useState(0);
+  const [emailIntentStarting, setEmailIntentStarting] = useState(false);
   const emailInputRef = useRef<HTMLInputElement | null>(null);
+  const voiceRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
+  const speakRef = useRef(speak);
+  speakRef.current = speak;
 
   const handleScannerVoice = (text: string) => {
     if (/\b(close|exit|back to wallet|wallet home|band karo|ghar)\b/i.test(text) || /वापस|बंद/.test(text)) {
@@ -80,27 +86,54 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
     if (email) {
       setRecipientEmail(email);
       onEmailEntryOpenChange?.(true);
+      if (!allowEmailRecipient) {
+        setEmailIntentStarting(true);
+        void Promise.resolve(onStartEmailPayment?.('I want to pay money by PayPal email')).finally(() => {
+          setEmailIntentStarting(false);
+          queueListening(2200);
+        });
+      }
       setVoiceMessage(lang === 'hi-IN' ? `ईमेल सुना: ${email}. भेजने से पहले जाँचें।` : `Email heard: ${email}. Check it before continuing.`);
       speak(lang === 'hi-IN' ? `ईमेल सुना ${email}. जारी रखने से पहले इसे जाँचें।` : `I heard ${email}. Check it before continuing.`, { lang });
+      if (allowEmailRecipient) queueListening(1800);
       return;
     }
 
     if (/\b(email|e-mail|pay by email|email se)\b/i.test(text) || /ईमेल/.test(text)) {
       if (!allowEmailRecipient) {
+        setEmailIntentStarting(true);
+        onEmailEntryOpenChange?.(true);
         setVoiceMessage(lang === 'hi-IN' ? 'Email se payment shuru kar rahe hain.' : 'Starting an email payment.');
-        void onStartEmailPayment?.(text);
+        scannerVoice.stopListening();
+        void Promise.resolve(onStartEmailPayment?.(text)).finally(() => {
+          setEmailIntentStarting(false);
+          queueListening(2200);
+        });
         return;
       }
       onEmailEntryOpenChange?.(true);
       const prompt = lang === 'hi-IN' ? 'PayPal email boliye ya neeche type karein.' : 'Say the recipient’s PayPal email, or type it below.';
       setVoiceMessage(prompt);
       speak(prompt, { lang });
+      scannerVoice.stopListening();
+      queueListening(1800);
       return;
     }
 
-    const prompt = lang === 'hi-IN' ? 'QR scan ke liye code camera mein rakhein. Wallet par jaane ke liye “scanner band karo” boliye.' : 'Hold the code in front of the camera to scan. Say “close scanner” to return to Wallet.';
+    if (/\b(scan|scanner|qr|camera)\b/i.test(text) || /स्कैन|कैमरा/.test(text)) {
+      const prompt = lang === 'hi-IN' ? 'Theek hai, QR code ko camera ke saamne rakhein.' : 'Okay, hold the QR code in front of the camera.';
+      setVoiceMessage(prompt);
+      speak(prompt, { lang });
+      void onStartEmailPayment?.(text);
+      queueListening(1800);
+      return;
+    }
+
+    const prompt = lang === 'hi-IN' ? 'Main samajh rahi hoon. QR scan karein ya PayPal email se pay karein?' : 'I’m listening. Would you like to scan a QR code or pay by PayPal email?';
     setVoiceMessage(prompt);
     speak(prompt, { lang });
+    void onStartEmailPayment?.(text);
+    queueListening(1800);
   };
 
   const scannerVoice = useSpeechRecognition({
@@ -111,6 +144,14 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
       speak(friendlyMessage, { lang });
     },
   });
+
+  const queueListening = (delayMs: number) => {
+    if (voiceRestartTimerRef.current) clearTimeout(voiceRestartTimerRef.current);
+    voiceRestartTimerRef.current = setTimeout(() => {
+      voiceRestartTimerRef.current = null;
+      if (isOpenRef.current && scannerVoice.isSupported && !scannerVoice.isListening) scannerVoice.startListening();
+    }, delayMs);
+  };
 
   const lastSpokenGuidanceRef = useRef<GuidanceMessage | null>(null);
   const lastSpokenTimeRef = useRef<number>(0);
@@ -187,8 +228,6 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
           : 'Camera access is not supported by this browser.');
       }
 
-      triggerGuidance('point_camera');
-
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
       });
@@ -245,8 +284,26 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   };
 
   useEffect(() => {
-    if (!isOpen) scannerVoice.stopListening();
+    if (!isOpen) {
+      scannerVoice.stopListening();
+      if (voiceRestartTimerRef.current) clearTimeout(voiceRestartTimerRef.current);
+      voiceRestartTimerRef.current = null;
+    }
   }, [isOpen, scannerVoice.stopListening]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const prompt = lang === 'hi-IN'
+      ? 'Aap QR scan karna chahte hain ya PayPal email se pay karna? Bolkar ya neeche button dabakar chunein.'
+      : 'Would you like to scan a QR code or pay by PayPal email? Say your choice, or tap an option below.';
+    setVoiceMessage(prompt);
+    speakRef.current(prompt, { lang });
+    if (scannerVoice.isSupported) {
+      // Wait for the spoken prompt to finish so speech recognition does not hear its own prompt.
+      const timer = setTimeout(() => scannerVoice.startListening(), 2400);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, lang, scannerVoice.isSupported, scannerVoice.startListening]);
 
   useEffect(() => {
     if (emailEntryOpen) emailInputRef.current?.focus();
@@ -505,20 +562,44 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
         )}
       </main>}
 
-      {allowEmailRecipient && !emailEntryOpen && (
+      {!emailEntryOpen && (
+        <div style={{ width: '100%', maxWidth: '560px', display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
+        <button
+          type="button"
+          onClick={() => {
+            setVoiceMessage(lang === 'hi-IN' ? 'QR code camera ke saamne rakhein.' : 'Hold a QR code in front of the camera.');
+            scannerVoice.stopListening();
+            speak(lang === 'hi-IN' ? 'QR code camera ke saamne rakhein.' : 'Hold a QR code in front of the camera.', { lang });
+          }}
+          style={{ minHeight: 64, flex: '1 1 200px', padding: '0.7rem 1.2rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--accent)', background: 'var(--accent)', color: 'var(--accent-text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}
+        >
+          {lang === 'hi-IN' ? 'QR code scan karein' : 'Scan a QR code'}
+        </button>
         <button
           type="button"
           onClick={() => {
             onEmailEntryOpenChange?.(true);
-            speak(lang === 'hi-IN' ? 'PayPal email boliye ya neeche type karke Continue dabaiye.' : 'Say the PayPal email, or type it below and press Continue.', { lang });
+            setVoiceMessage(lang === 'hi-IN' ? 'PayPal email boliye ya type karein.' : 'Say or type the recipient’s PayPal email.');
+            scannerVoice.stopListening();
+            if (!allowEmailRecipient) {
+              setEmailIntentStarting(true);
+              void Promise.resolve(onStartEmailPayment?.('I want to pay money by PayPal email')).finally(() => {
+                setEmailIntentStarting(false);
+                queueListening(700);
+              });
+            } else {
+              queueListening(1600);
+            }
+            speak(lang === 'hi-IN' ? 'PayPal email boliye ya type karein.' : 'Say or type the recipient’s PayPal email.', { lang });
           }}
-          style={{ minHeight: 64, width: '100%', maxWidth: '560px', padding: '0.7rem 1.2rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}
+          style={{ minHeight: 64, flex: '1 1 200px', padding: '0.7rem 1.2rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}
         >
           {lang === 'hi-IN' ? 'PayPal email se pay karein' : 'Pay by PayPal email'}
         </button>
+        </div>
       )}
 
-      {allowEmailRecipient && emailEntryOpen && (
+      {emailEntryOpen && (
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -529,8 +610,10 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
           }}
           style={{ width: '100%', maxWidth: '560px', display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.25rem', borderRadius: 'var(--radius-card, 16px)', border: '2px solid var(--border)', background: 'var(--surface)' }}
         >
-          <BodyText size="large" style={{ fontWeight: 750 }}>{lang === 'hi-IN' ? 'PayPal Sandbox email' : 'PayPal Sandbox email'}</BodyText>
-          <label htmlFor="scanner-recipient-email" style={{ fontWeight: 650 }}>{lang === 'hi-IN' ? 'Email boliye ya type karein' : 'Say or type the recipient’s email'}</label>
+          <BodyText size="large" style={{ fontWeight: 750 }}>{lang === 'hi-IN' ? 'Kisko payment bhejni hai?' : 'Who would you like to pay?'}</BodyText>
+          <BodyText muted>{lang === 'hi-IN' ? 'Recipient ka PayPal Sandbox email boliye ya type karein. Aage badhne se pehle aapko ise check karne ka mauka milega.' : 'Say or enter the recipient’s PayPal Sandbox email. You will be able to review it before continuing.'}</BodyText>
+          {emailIntentStarting && <div role="status" aria-live="polite"><BodyText>{lang === 'hi-IN' ? 'Email payment taiyaar kar rahe hain…' : 'Getting email payment ready…'}</BodyText></div>}
+          <label htmlFor="scanner-recipient-email" style={{ fontWeight: 650 }}>{lang === 'hi-IN' ? 'PayPal email' : 'Recipient’s PayPal email'}</label>
           <input
             ref={emailInputRef}
             id="scanner-recipient-email"
@@ -540,15 +623,15 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
             autoCapitalize="none"
             spellCheck={false}
             required
-            disabled={submittingEmail}
+            disabled={submittingEmail || emailIntentStarting}
             value={recipientEmail}
             onChange={(event) => setRecipientEmail(event.target.value)}
             placeholder="name@example.com"
             style={{ minHeight: 64, width: '100%', boxSizing: 'border-box', padding: '0.75rem', borderRadius: 'var(--radius-card, 12px)', border: '2px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', font: 'inherit' }}
           />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <button type="submit" disabled={submittingEmail} style={{ minHeight: 64, flex: '1 1 170px', padding: '0.7rem 1rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--accent)', background: 'var(--accent)', color: 'var(--accent-text)', font: 'inherit', fontWeight: 750, cursor: submittingEmail ? 'wait' : 'pointer', opacity: submittingEmail ? 0.7 : 1 }}>
-              {submittingEmail ? (lang === 'hi-IN' ? 'Taiyaar ho raha hai…' : 'Preparing…') : (lang === 'hi-IN' ? 'Email se continue karein' : 'Continue with email')}
+            <button type="submit" disabled={submittingEmail || emailIntentStarting} style={{ minHeight: 64, flex: '1 1 170px', padding: '0.7rem 1rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--accent)', background: 'var(--accent)', color: 'var(--accent-text)', font: 'inherit', fontWeight: 750, cursor: submittingEmail || emailIntentStarting ? 'wait' : 'pointer', opacity: submittingEmail || emailIntentStarting ? 0.7 : 1 }}>
+              {submittingEmail ? (lang === 'hi-IN' ? 'Taiyaar ho raha hai…' : 'Preparing…') : emailIntentStarting ? (lang === 'hi-IN' ? 'Taiyaar ho raha hai…' : 'Getting ready…') : (lang === 'hi-IN' ? 'Email check karein' : 'Review email')}
             </button>
             <button type="button" onClick={() => onEmailEntryOpenChange?.(false)} style={{ minHeight: 64, flex: '1 1 140px', padding: '0.7rem 1rem', borderRadius: 'var(--radius-pill, 999px)', border: '2px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', font: 'inherit', fontWeight: 750, cursor: 'pointer' }}>
               {lang === 'hi-IN' ? 'QR par wapas' : 'Back to QR scan'}
