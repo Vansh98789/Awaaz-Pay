@@ -10,6 +10,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DEMO_AUTH_BYPASS
+        value: "false"
+      - key: DEMO_SKIP_COOLING
+        value: "false"
+      - key: LLM_DEMO_CACHE
+        value: "false"
       - key: PORT
         value: 10000
       - key: PUBLIC_BASE_URL
