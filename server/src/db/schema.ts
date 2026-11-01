@@ -11,7 +11,7 @@ const CREATE_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS contacts (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, alias TEXT NOT NULL, display_name TEXT NOT NULL, paypal_email TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('cooling_off', 'active')), added_by TEXT NOT NULL, activated_at TIMESTAMPTZ)`,
   `CREATE TABLE IF NOT EXISTS merchants (id TEXT PRIMARY KEY, name TEXT NOT NULL, paypal_email TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS invoices (id TEXT PRIMARY KEY, merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE, paypal_invoice_id TEXT NOT NULL, amount NUMERIC NOT NULL, currency TEXT NOT NULL DEFAULT 'USD', status TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, type TEXT NOT NULL, amount NUMERIC NOT NULL, currency TEXT NOT NULL DEFAULT 'USD', counterparty_type TEXT NOT NULL, counterparty_id TEXT NOT NULL, tier INTEGER NOT NULL, risk_score NUMERIC NOT NULL, decision TEXT NOT NULL, status TEXT NOT NULL, paypal_ref TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
+  `CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, type TEXT NOT NULL, amount NUMERIC NOT NULL, currency TEXT NOT NULL DEFAULT 'USD', counterparty_type TEXT NOT NULL, counterparty_id TEXT NOT NULL, tier INTEGER NOT NULL, risk_score NUMERIC NOT NULL, decision TEXT NOT NULL, status TEXT NOT NULL, paypal_ref TEXT, payout_request_id TEXT, payout_receiver_email TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
   `CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE, guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE, token TEXT NOT NULL UNIQUE, status TEXT NOT NULL, created_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, decided_at TIMESTAMPTZ)`,
   `CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, message TEXT NOT NULL, spoken_text TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
   `CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
@@ -33,7 +33,7 @@ const MIRROR_COLUMNS: Record<(typeof LEGACY_TABLES)[number], string[]> = {
   merchants: ['id', 'name', 'paypal_email', 'verified'],
   contacts: ['id', 'user_id', 'alias', 'display_name', 'paypal_email', 'status', 'added_by', 'activated_at'],
   invoices: ['id', 'merchant_id', 'paypal_invoice_id', 'amount', 'currency', 'status'],
-  transactions: ['id', 'user_id', 'type', 'amount', 'currency', 'counterparty_type', 'counterparty_id', 'tier', 'risk_score', 'decision', 'status', 'paypal_ref', 'created_at'],
+  transactions: ['id', 'user_id', 'type', 'amount', 'currency', 'counterparty_type', 'counterparty_id', 'tier', 'risk_score', 'decision', 'status', 'paypal_ref', 'payout_request_id', 'payout_receiver_email', 'created_at'],
   approvals: ['id', 'transaction_id', 'guardian_id', 'token', 'status', 'created_at', 'expires_at', 'decided_at'],
   notifications: ['id', 'user_id', 'kind', 'message', 'spoken_text', 'delivered', 'created_at'],
   audit_events: ['id', 'user_id', 'kind', 'payload', 'created_at'],
@@ -45,6 +45,10 @@ const MIRROR_COLUMNS: Record<(typeof LEGACY_TABLES)[number], string[]> = {
 /** Create the live PostgreSQL schema and safely import the old mirrored SQLite snapshot once. */
 export async function runMigrations(db: Database): Promise<void> {
   for (const statement of CREATE_STATEMENTS) await db.query(statement);
+
+  await db.query('ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payout_request_id TEXT');
+  await db.query('ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payout_receiver_email TEXT');
+  await db.query("UPDATE transactions SET payout_request_id = 'payout-' || id WHERE payout_request_id IS NULL");
 
   // Older deployed schemas had this ledger shape. Keep its old columns usable,
   // while the application now reads and writes the canonical signed delta.

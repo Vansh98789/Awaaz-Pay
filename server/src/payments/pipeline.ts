@@ -3,6 +3,7 @@ import type { AppDatabase as Database } from '../db/connection.js';
 import { evaluatePayment } from '../rules/engine.js';
 import type { Decision, PaymentRequest, ScamRiskLevel } from '../rules/types.js';
 import { createPayoutBatch, getPayoutBatch } from '../paypal/index.js';
+import { PayPalError } from '../paypal/types.js';
 import {
   getTransactionById,
   getUserById,
@@ -172,7 +173,17 @@ export async function refreshPayoutStatus(
 ): Promise<{ status: string | null; paypalStatus?: string }> {
   const tx = await getTransactionById(db, transactionId);
   if (!tx) return { status: null };
-  if (tx.status !== 'processing' || !tx.paypal_ref) return { status: tx.status };
+  if (tx.status === 'unknown' || tx.status === 'reconciling') return { status: 'unknown' };
+  if (tx.status !== 'processing') return { status: tx.status };
+  if (!tx.paypal_ref) {
+    await updateTransactionStatus(db, tx.id, 'unknown');
+    await writeAudit(db, {
+      user_id: tx.user_id,
+      kind: 'payment_payout_unknown',
+      payload: JSON.stringify({ transactionId: tx.id, reason: 'Processing transaction has no PayPal batch ID.' }),
+    });
+    return { status: 'unknown' };
+  }
 
   let batch;
   try {
@@ -221,6 +232,96 @@ export async function refreshPayoutStatus(
   return { status: 'processing', paypalStatus: status };
 }
 
+/**
+ * Replays only the original immutable payout request using its stored PayPal
+ * idempotency key. This safely discovers PayPal's original result without
+ * creating a second logical payout.
+ */
+export async function reconcilePayoutStatus(
+  db: Database,
+  transactionId: string,
+): Promise<ConfirmPaymentResult> {
+  const tx = await getTransactionById(db, transactionId);
+  if (!tx) return { status: 'error', transactionId, error: 'Transaction not found.', httpStatus: 404 };
+
+  if (tx.status === 'processing' && tx.paypal_ref) {
+    const refreshed = await refreshPayoutStatus(db, tx.id);
+    return { status: refreshed.status || 'processing', transactionId: tx.id, batchId: tx.paypal_ref, paypalStatus: refreshed.paypalStatus, httpStatus: 202 };
+  }
+  if (tx.status === 'completed' || tx.status === 'failed') {
+    return { status: tx.status, transactionId: tx.id, batchId: tx.paypal_ref || undefined, alreadyPaid: tx.status === 'completed', httpStatus: 200 };
+  }
+  if (tx.status === 'processing' && !tx.paypal_ref) {
+    await updateTransactionStatus(db, tx.id, 'unknown');
+  }
+
+  const claim = (await db.query<{ id: string }>(
+    `UPDATE transactions SET status = 'reconciling'
+     WHERE id = $1 AND status = 'unknown'
+     RETURNING id`,
+    [tx.id],
+  ))[0];
+  if (!claim) {
+    const current = await getTransactionById(db, tx.id);
+    if (current?.status === 'processing' && current.paypal_ref) {
+      const refreshed = await refreshPayoutStatus(db, tx.id);
+      return { status: refreshed.status || 'processing', transactionId: tx.id, batchId: current.paypal_ref, paypalStatus: refreshed.paypalStatus, httpStatus: 202 };
+    }
+    return {
+      status: 'unknown', transactionId: tx.id,
+      message: 'The original payout is still being reconciled. Do not create another payment.',
+      spoken_message: 'The original payment is still being checked. Do not send another payment.',
+      httpStatus: 202,
+    };
+  }
+
+  if (!tx.payout_request_id || !tx.payout_receiver_email) {
+    await updateTransactionStatus(db, tx.id, 'unknown');
+    return {
+      status: 'unknown', transactionId: tx.id,
+      message: 'The original payout details are incomplete. Contact support before taking further action.',
+      httpStatus: 202,
+    };
+  }
+
+  try {
+    const replay = await createPayoutBatch([{
+      recipient_email: tx.payout_receiver_email,
+      amount: tx.amount,
+      currency: tx.currency,
+      note: 'Payment from Awaaz Pay user',
+      sender_item_id: tx.id,
+    }], 'Payment from Awaaz Pay', tx.payout_request_id);
+    const batchId = replay.batch_header?.payout_batch_id || '';
+    if (!batchId) throw new Error('PayPal has not returned the original payout batch ID yet.');
+
+    await updateTransactionStatus(db, tx.id, 'processing', batchId);
+    const refreshed = await refreshPayoutStatus(db, tx.id);
+    if (refreshed.status === 'completed' || refreshed.status === 'failed') {
+      return { status: refreshed.status, transactionId: tx.id, batchId, paypalStatus: refreshed.paypalStatus, httpStatus: 200 };
+    }
+    return {
+      status: 'processing', transactionId: tx.id, batchId, paypalStatus: refreshed.paypalStatus,
+      message: 'PayPal returned the original payout. It is still processing.',
+      spoken_message: 'PayPal found the original payment. It is still processing. Do not send it again.',
+      httpStatus: 202,
+    };
+  } catch (err) {
+    await updateTransactionStatus(db, tx.id, 'unknown');
+    await writeAudit(db, {
+      user_id: tx.user_id,
+      kind: 'payment_payout_reconciliation_pending',
+      payload: JSON.stringify({ transactionId: tx.id, payoutRequestId: tx.payout_request_id, error: (err as Error).message }),
+    });
+    return {
+      status: 'unknown', transactionId: tx.id,
+      message: 'PayPal has not confirmed the original payout. Do not create another payment; check again later.',
+      spoken_message: 'I still cannot confirm the original payment. Do not send it again. Check the status again later.',
+      httpStatus: 202,
+    };
+  }
+}
+
 export async function confirmPayment(
   db: Database,
   params: ConfirmPaymentParams
@@ -256,6 +357,16 @@ export async function confirmPayment(
   }
 
   if (tx.status === 'processing') {
+    if (!tx.paypal_ref) {
+      await updateTransactionStatus(db, tx.id, 'unknown');
+      return {
+        status: 'unknown',
+        transactionId: tx.id,
+        message: 'The payout request may have reached PayPal, but its result is not known yet.',
+        spoken_message: 'I cannot confirm whether PayPal received this payment. Do not send it again. Check payment status before taking any further action.',
+        httpStatus: 202,
+      };
+    }
     const refreshedStatus = await refreshPayoutStatus(db, tx.id);
     if (refreshedStatus.status === 'completed') {
       return {
@@ -280,6 +391,16 @@ export async function confirmPayment(
       transactionId: tx.id,
       message: 'Payment is currently processing.',
       httpStatus: 200,
+    };
+  }
+
+  if (tx.status === 'unknown' || tx.status === 'reconciling') {
+    return {
+      status: 'unknown',
+      transactionId: tx.id,
+      message: 'This payout has an unknown outcome. Reconcile it before attempting any new payment.',
+      spoken_message: 'I cannot confirm whether this payment reached PayPal. Do not send it again. Check the payment status first.',
+      httpStatus: 202,
     };
   }
 
@@ -371,13 +492,6 @@ export async function confirmPayment(
     };
   }
 
-  await updateTransactionStatus(db, tx.id, 'processing');
-  await writeAudit(db, {
-    user_id: tx.user_id,
-    kind: 'payment_confirmed_processing',
-    payload: JSON.stringify({ transactionId: tx.id, amount: tx.amount }),
-  });
-
   let recipientEmail = '';
   if (tx.counterparty_type === 'contact') {
     const c = (await db.query<{ paypal_email: string }>('SELECT paypal_email FROM contacts WHERE id = $1', [tx.counterparty_id]))[0];
@@ -400,17 +514,50 @@ export async function confirmPayment(
   } else if (tx.counterparty_id.includes('@')) {
     recipientEmail = tx.counterparty_id;
   }
+  recipientEmail = tx.payout_receiver_email || recipientEmail;
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail) || tx.amount <= 0) {
+    const message = !recipientEmail
+      ? 'No PayPal recipient email is set. Scan the recipient QR or enter their Sandbox email.'
+      : 'PayPal payout amount is below the smallest supported unit.';
+    await updateTransactionStatus(db, tx.id, 'failed');
+    return { status: 'failed', transactionId: tx.id, error: message, spoken_message: message, httpStatus: 400 };
+  }
+
+  const stableRequestId = tx.payout_request_id || `payout-${tx.id}`;
+  const claim = (await db.query<{ payout_request_id: string; payout_receiver_email: string }>(
+    `UPDATE transactions
+     SET status = 'processing', payout_request_id = COALESCE(payout_request_id, $3),
+         payout_receiver_email = COALESCE(payout_receiver_email, $2)
+     WHERE id = $1 AND status IN ('pending_confirmation', 'confirmed')
+     RETURNING payout_request_id, payout_receiver_email`,
+    [tx.id, recipientEmail, stableRequestId],
+  ))[0];
+  if (!claim) {
+    const current = await getTransactionById(db, tx.id);
+    if (current?.status === 'completed') {
+      return { status: 'completed', transactionId: tx.id, alreadyPaid: true, httpStatus: 200 };
+    }
+    if (current && ['processing', 'unknown', 'reconciling'].includes(current.status)) {
+      return { status: current.status === 'processing' ? 'processing' : 'unknown', transactionId: tx.id, message: 'This payment is already being processed. Do not retry it.', httpStatus: 202 };
+    }
+    return { status: 'error', transactionId: tx.id, error: 'This payment is no longer available for confirmation.', httpStatus: 409 };
+  }
+  recipientEmail = claim.payout_receiver_email;
+  await writeAudit(db, {
+    user_id: tx.user_id,
+    kind: 'payment_confirmed_processing',
+    payload: JSON.stringify({ transactionId: tx.id, amount: tx.amount }),
+  });
 
   let batchId = '';
   let batchStatus = '';
   const paypalAmount = tx.amount;
   const paypalCurrency = tx.currency;
+  let payoutRequestStarted = false;
 
   try {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
-      throw new Error('No PayPal recipient email is set. Scan the recipient QR or enter their Sandbox email.');
-    }
-    if (paypalAmount <= 0) throw new Error('PayPal payout amount is below the smallest supported unit.');
+    payoutRequestStarted = true;
     const payoutBatch = await createPayoutBatch([
       {
         recipient_email: recipientEmail,
@@ -419,15 +566,14 @@ export async function confirmPayment(
         note: `Payment from Awaaz Pay user`,
         sender_item_id: tx.id,
       },
-    ]);
+    ], 'Payment from Awaaz Pay', claim.payout_request_id);
 
     batchId = payoutBatch.batch_header?.payout_batch_id || '';
+    if (batchId) await updateTransactionStatus(db, tx.id, 'processing', batchId);
     batchStatus = payoutBatch.items?.[0]?.transaction_status?.toUpperCase()
       || payoutBatch.batch_header?.batch_status?.toUpperCase()
-      || '';
-    if (!batchId || !batchStatus) {
-      throw new Error('PayPal did not return a payout batch ID and status.');
-    }
+      || 'PENDING';
+    if (!batchId) throw new Error('PayPal did not return a payout batch ID. The payout outcome is unknown.');
 
     if (['PENDING', 'PROCESSING', 'ACKNOWLEDGED'].includes(batchStatus)) {
       try {
@@ -441,7 +587,18 @@ export async function confirmPayment(
     }
 
     if (['FAILED', 'DENIED', 'CANCELED', 'CANCELLED', 'BLOCKED', 'RETURNED', 'REFUNDED', 'REVERSED'].includes(batchStatus)) {
-      throw new Error(`PayPal payout batch status: ${batchStatus}`);
+      await updateTransactionStatus(db, tx.id, 'failed', batchId);
+      await writeAudit(db, {
+        user_id: tx.user_id,
+        kind: 'payment_payout_failed',
+        payload: JSON.stringify({ transactionId: tx.id, batchId, paypalStatus: batchStatus }),
+      });
+      return {
+        status: 'failed', transactionId: tx.id, batchId, paypalStatus: batchStatus,
+        message: `PayPal payout batch status: ${batchStatus}.`,
+        spoken_message: 'PayPal confirmed that this payout did not complete.',
+        httpStatus: 200,
+      };
     }
 
     if (batchStatus !== 'SUCCESS') {
@@ -464,21 +621,27 @@ export async function confirmPayment(
   } catch (err) {
     const errMsg = (err as Error).message || '';
     const insufficientFunds = /INSUFFICIENT_FUNDS|insufficient funds/i.test(errMsg);
-    await updateTransactionStatus(db, tx.id, 'failed');
+    const definiteRejection = err instanceof PayPalError
+      && err.status >= 400 && err.status < 500
+      && !/duplicate|sender_batch_id/i.test(err.body);
+    const finalStatus = payoutRequestStarted && !definiteRejection ? 'unknown' : 'failed';
+    await updateTransactionStatus(db, tx.id, finalStatus, batchId || undefined);
     await writeAudit(db, {
       user_id: tx.user_id,
-      kind: 'payment_payout_failed',
-      payload: JSON.stringify({ transactionId: tx.id, error: errMsg }),
+      kind: finalStatus === 'unknown' ? 'payment_payout_unknown' : 'payment_payout_failed',
+      payload: JSON.stringify({ transactionId: tx.id, batchId: batchId || undefined, error: errMsg, payoutRequestId: claim.payout_request_id }),
     });
 
     return {
-      status: 'failed',
+      status: finalStatus,
       transactionId: tx.id,
       error: `Payout dispatch failed: ${errMsg}`,
-      spoken_message: insufficientFunds
+      spoken_message: finalStatus === 'unknown'
+        ? 'PayPal may have received this payout, but I could not confirm the result. Do not send it again. Check payment status first.'
+        : insufficientFunds
         ? 'The PayPal Sandbox sender account does not have enough available funds for this payout.'
-        : 'PayPal did not confirm this payout. Check PayPal activity before retrying.',
-      httpStatus: 500,
+        : 'PayPal rejected this payout. No payment was sent.',
+      httpStatus: finalStatus === 'unknown' ? 202 : 500,
     };
   }
 

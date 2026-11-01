@@ -144,6 +144,8 @@ export const App: React.FC = () => {
     return initial;
   });
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const scannerOpenRef = useRef(isScannerOpen);
+  scannerOpenRef.current = isScannerOpen;
   const [scannerEmailEntryOpen, setScannerEmailEntryOpen] = useState(false);
   const [scannerRestartToken, setScannerRestartToken] = useState(0);
   const [awaitingPaymentRecipient, setAwaitingPaymentRecipient] = useState(false);
@@ -184,6 +186,7 @@ export const App: React.FC = () => {
   }, [themeMode]);
 
   const handleSpeechEnd = useCallback(() => {
+    if (scannerOpenRef.current) return;
     if (currentRouteRef.current.path !== 'wallet') return;
     if (autoListenAfterNavigationRef.current || pageVoiceSessionRef.current) {
       autoListenAfterNavigationRef.current = false;
@@ -712,7 +715,7 @@ export const App: React.FC = () => {
 
       if (data.state === 'awaiting_payment_recipient') {
         setAwaitingPaymentRecipient(true);
-        setScannerEmailEntryOpen(scannerEmailEntryOpen);
+        setScannerEmailEntryOpen(/\b(e-?mail|email address)\b/i.test(text) || /ईमेल/.test(text));
         setIsScannerOpen(true);
         pageVoiceSessionRef.current = true;
         setScanError(null);
@@ -809,6 +812,10 @@ export const App: React.FC = () => {
       onResult: handleSpeechResult,
       onError: handleSpeechError,
     });
+
+  useEffect(() => {
+    if (isScannerOpen && isListening) stopListening();
+  }, [isScannerOpen, isListening, stopListening]);
 
   useEffect(() => {
     startListeningRef.current = startListening;
@@ -1550,6 +1557,7 @@ export const App: React.FC = () => {
         emailEntryOpen={scannerEmailEntryOpen}
         onEmailEntryOpenChange={setScannerEmailEntryOpen}
         onUseEmail={(email) => handleSpeechResult(email, true)}
+        onStartEmailPayment={(utterance) => handleSpeechResult(utterance, true)}
         onReturnHome={() => {
           stopListening();
           setIsScannerOpen(false);

@@ -1,14 +1,17 @@
 import { ppRequest } from './client.js';
+import crypto from 'node:crypto';
 import type { PayoutItem, PayoutBatchResponse } from './types.js';
 
 export async function createPayoutBatch(
   items: PayoutItem[],
   emailSubject = 'Payment from Awaaz Pay',
+  idempotencyKey = crypto.randomUUID(),
 ): Promise<PayoutBatchResponse> {
   return ppRequest<PayoutBatchResponse>('POST', '/v1/payments/payouts', {
+    idempotencyKey,
     body: {
       sender_batch_header: {
-        sender_batch_id: `awaaz-${Date.now()}`,
+        sender_batch_id: idempotencyKey,
         email_subject: emailSubject,
       },
       items: items.map((i) => ({

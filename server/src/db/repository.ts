@@ -31,17 +31,24 @@ export async function addLedgerEntry(db: Database, entry: Omit<LedgerEntry, 'id'
   return record;
 }
 
-export async function recordTransaction(db: Database, tx: Omit<Transaction, 'id' | 'created_at' | 'paypal_ref'> & { id?: string; created_at?: string; paypal_ref?: string | null }): Promise<Transaction> {
-  const record: Transaction = { ...tx, id: tx.id || crypto.randomUUID(), paypal_ref: tx.paypal_ref ?? null, created_at: tx.created_at || new Date().toISOString() };
-  await db.query(`INSERT INTO transactions (id, user_id, type, amount, currency, counterparty_type, counterparty_id, tier, risk_score, decision, status, paypal_ref, created_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`, [record.id, record.user_id, record.type, record.amount, record.currency, record.counterparty_type, record.counterparty_id, record.tier, record.risk_score, record.decision, record.status, record.paypal_ref, record.created_at]);
+export async function recordTransaction(db: Database, tx: Omit<Transaction, 'id' | 'created_at' | 'paypal_ref' | 'payout_request_id' | 'payout_receiver_email'> & Partial<Pick<Transaction, 'id' | 'created_at' | 'paypal_ref' | 'payout_request_id' | 'payout_receiver_email'>>): Promise<Transaction> {
+  const record: Transaction = {
+    ...tx,
+    id: tx.id || crypto.randomUUID(),
+    paypal_ref: tx.paypal_ref ?? null,
+    payout_request_id: tx.payout_request_id ?? crypto.randomUUID(),
+    payout_receiver_email: tx.payout_receiver_email ?? null,
+    created_at: tx.created_at || new Date().toISOString(),
+  };
+  await db.query(`INSERT INTO transactions (id, user_id, type, amount, currency, counterparty_type, counterparty_id, tier, risk_score, decision, status, paypal_ref, payout_request_id, payout_receiver_email, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`, [record.id, record.user_id, record.type, record.amount, record.currency, record.counterparty_type, record.counterparty_id, record.tier, record.risk_score, record.decision, record.status, record.paypal_ref, record.payout_request_id, record.payout_receiver_email, record.created_at]);
   return record;
 }
 
 export async function getTransactionById(db: Database, id: string): Promise<Transaction | null> {
   const tx = await first<Transaction>(db,
     `SELECT id, user_id, type, amount::float8 AS amount, currency, counterparty_type, counterparty_id,
-      tier, risk_score::float8 AS risk_score, decision, status, paypal_ref, created_at
+      tier, risk_score::float8 AS risk_score, decision, status, paypal_ref, payout_request_id, payout_receiver_email, created_at
      FROM transactions WHERE id = $1`, [id]);
   return tx ? { ...tx, amount: Number(tx.amount), risk_score: Number(tx.risk_score) } : null;
 }

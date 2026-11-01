@@ -62,6 +62,8 @@ export interface Transaction {
   decision: string;
   status: string;
   paypal_ref: string | null;
+  payout_request_id: string | null;
+  payout_receiver_email: string | null;
   created_at: string;
 }
 
