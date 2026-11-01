@@ -62,6 +62,36 @@ function findContact(text: string, contacts: string[]): string | null {
     if (lower.includes(c.toLowerCase())) return c;
   }
 
+  const normalizedText = text.normalize('NFKC').toLowerCase();
+  const words = normalizedText.match(/[a-z0-9]{6,}/g) ?? [];
+  const closeMatches = contacts.filter((contact) => {
+    const candidate = contact.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return candidate.length >= 6 && words.some((word) => {
+      if (Math.abs(word.length - candidate.length) > 1) return false;
+      let i = 0;
+      let j = 0;
+      let differences = 0;
+      while (i < word.length && j < candidate.length) {
+        if (word[i] === candidate[j]) {
+          i += 1;
+          j += 1;
+          continue;
+        }
+        differences += 1;
+        if (differences > 1) return false;
+        if (word.length >= candidate.length) i += 1;
+        if (candidate.length >= word.length) j += 1;
+      }
+      if (i < word.length || j < candidate.length) differences += 1;
+      return differences <= 1;
+    });
+  });
+  const distinctCloseMatches = [...new Map(closeMatches.map((contact) => [
+    contact.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g, ''),
+    contact,
+  ])).values()];
+  if (distinctCloseMatches.length === 1) return distinctCloseMatches[0];
+
   const emailMatch = text.match(/[\w.-]+@[\w.-]+\.\w+/);
   if (emailMatch) return emailMatch[0];
 

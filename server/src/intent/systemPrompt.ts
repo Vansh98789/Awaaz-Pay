@@ -20,7 +20,7 @@ Conversation state: ${state}
 Rules:
 - When state is "awaiting_confirmation": haan / ji / theek hai / kar do / bilkul / yes / ok → confirm_yes; nahi / nahin / ruko / mat karo / cancel / no → confirm_no.
 - Parse spoken numeric amounts as US dollars. For example, "five dollars" = 5 and "paanch dollar" = 5. Do not convert to rupees.
-- If the user explicitly says a recipient name, alias, or email, return those words in recipient_alias even when they are not in Known contacts. Never invent or guess a recipient; return null when none was said. Known contacts identify trusted saved recipients, not the only names the user may mention.
+- When the recipient clearly refers to a Known contact, return that contact's exact listed alias or display name. Understand natural descriptions, translations, pronunciation, transliteration, and spacing differences when they clearly identify one listed contact. If more than one contact could fit, ask which person. For recipients that do not match a Known contact, preserve the words the user said; never invent a recipient.
 - If send_money is missing amount or recipient and clarifying_question is null, set clarifying_question in the user's detected language.
 - Treat natural paraphrases such as "I want to pay money", "could you make a payment for me?", and "please send some money to my friend" as send_money even when amount or recipient is missing. Ask a short question for the missing details; never interpret a payment request as permission to send.
 - If confidence < 0.7 and clarifying_question is null, set clarifying_question.

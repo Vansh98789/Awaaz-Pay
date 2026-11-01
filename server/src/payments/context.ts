@@ -18,6 +18,30 @@ export interface ResolvedPayee {
   merchant?: Merchant;
 }
 
+function normalizePayeeLabel(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}\p{M}]/gu, '');
+}
+
+function differsByAtMostOneAsciiCharacter(left: string, right: string): boolean {
+  if (!/^[a-z0-9]+$/.test(left) || !/^[a-z0-9]+$/.test(right) || Math.abs(left.length - right.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let differences = 0;
+  while (i < left.length && j < right.length) {
+    if (left[i] === right[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    differences += 1;
+    if (differences > 1) return false;
+    if (left.length >= right.length) i += 1;
+    if (right.length >= left.length) j += 1;
+  }
+  if (i < left.length || j < right.length) differences += 1;
+  return differences <= 1;
+}
+
 export async function resolvePayee(
   db: Database,
   userId: string,
@@ -25,23 +49,24 @@ export async function resolvePayee(
 ): Promise<ResolvedPayee> {
   const q = payeeQuery.trim().toLowerCase();
 
-  const contact = (await db.query<Contact>(
+  let contact = (await db.query<Contact>(
     `SELECT * FROM contacts WHERE user_id = $1
      AND (LOWER(alias) = $2 OR LOWER(display_name) = $3 OR LOWER(paypal_email) = $4) LIMIT 1`,
     [userId, q, q, q]))[0];
 
-  const normalizedQuery = q.replace(/[\s_-]+/g, '');
-  const vegetableSellerQuery = /\b(vegetable|veggie|produce)\b.*\b(vendor|seller|shopkeeper)\b|\b(vendor|seller|shopkeeper)\b.*\b(vegetable|veggie|produce)\b/i.test(q)
-    || /^(sabzi|sabji)wala$/i.test(normalizedQuery);
-  const vegetableSeller = !contact && vegetableSellerQuery
-    ? (await db.query<Contact>(
-      `SELECT * FROM contacts WHERE user_id = $1
-       AND (LOWER(alias) LIKE '%sabzi%' OR LOWER(alias) LIKE '%sabji%'
-         OR LOWER(display_name) LIKE '%sabzi%' OR LOWER(display_name) LIKE '%sabji%')
-       ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END LIMIT 1`,
-      [userId]))[0]
-    : undefined;
-  const matchedContact = contact || vegetableSeller;
+  if (!contact && /^[a-z0-9]+$/i.test(normalizePayeeLabel(q)) && normalizePayeeLabel(q).length >= 6) {
+    const candidates = await db.query<Contact>('SELECT * FROM contacts WHERE user_id = $1 ORDER BY alias ASC', [userId]);
+    const queryLabel = normalizePayeeLabel(q);
+    const fuzzyMatches = candidates.filter((candidate) =>
+      [candidate.alias, candidate.display_name]
+        .map(normalizePayeeLabel)
+        .some((label) => label.length >= 6 && differsByAtMostOneAsciiCharacter(queryLabel, label)),
+    );
+    const distinctMatches = [...new Map(fuzzyMatches.map((candidate) => [candidate.id, candidate])).values()];
+    if (distinctMatches.length === 1) contact = distinctMatches[0];
+  }
+
+  const matchedContact = contact;
 
   if (matchedContact) {
     return {
