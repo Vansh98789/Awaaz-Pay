@@ -1,5 +1,4 @@
 import { Router, type Request, type Response } from 'express';
-import crypto from 'node:crypto';
 import type { AppDatabase as Database } from '../db/connection.js';
 import {
   generateRegistrationOptions,
@@ -50,41 +49,10 @@ export function createAuthRouter(db: Database): Router {
     }
   }
 
-  const getRegistrationUserId = (req: Request): string =>
-    process.env.NODE_ENV === 'production' ? 'user_meena' : (req.body?.userId || 'user_meena');
-
-  const mayManagePasskeys = (req: Request, userId: string): boolean => {
-    const token = req.cookies?.[SESSION_COOKIE_NAME];
-    return !!token && getSessionUser(token)?.userId === userId;
-  };
-
-  const hasValidSetupCode = (req: Request): boolean => {
-    const expected = process.env.PASSKEY_SETUP_CODE || '';
-    const supplied = typeof req.body?.setupCode === 'string' ? req.body.setupCode : '';
-    if (!expected || !supplied) return false;
-    const expectedBuffer = Buffer.from(expected);
-    const suppliedBuffer = Buffer.from(supplied);
-    return expectedBuffer.length === suppliedBuffer.length && crypto.timingSafeEqual(expectedBuffer, suppliedBuffer);
-  };
-
-  router.get('/status', async (_req: Request, res: Response) => {
-    try {
-      const userPasskeys = await getPasskeysByUserId(db, 'user_meena');
-      res.status(200).json({
-        authenticated: false,
-        passkeyConfigured: userPasskeys.length > 0,
-        registrationAvailable: userPasskeys.length === 0,
-        requiresSetupCode: process.env.NODE_ENV === 'production' && userPasskeys.length === 0,
-      });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
   // 1. Generate Registration Options
   router.post('/register-options', async (req: Request, res: Response) => {
     try {
-      const userId = getRegistrationUserId(req);
+      const { userId = 'user_meena' } = req.body;
       const user = await getUserById(db, userId);
       if (!user) {
         res.status(404).json({ error: 'Wallet profile not found.' });
@@ -93,14 +61,6 @@ export function createAuthRouter(db: Database): Router {
       const userName = user?.name || 'Meena';
 
       const existingPasskeys = await getPasskeysByUserId(db, userId);
-      if (existingPasskeys.length === 0 && process.env.NODE_ENV === 'production' && !hasValidSetupCode(req)) {
-        res.status(403).json({ error: 'Enter the one-time wallet setup code configured by the administrator.' });
-        return;
-      }
-      if (existingPasskeys.length > 0 && !mayManagePasskeys(req, userId)) {
-        res.status(403).json({ error: 'A passkey is already set up. Sign in before adding another device.' });
-        return;
-      }
 
       const options = await generateRegistrationOptions({
         rpName,
@@ -130,8 +90,7 @@ export function createAuthRouter(db: Database): Router {
   // 2. Verify Registration Response
   router.post('/verify-registration', async (req: Request, res: Response) => {
     try {
-      const userId = getRegistrationUserId(req);
-      const { response } = req.body;
+      const { userId = 'user_meena', response } = req.body;
       if (!response) {
         res.status(400).json({ error: 'WebAuthn response is required' });
         return;
@@ -140,13 +99,6 @@ export function createAuthRouter(db: Database): Router {
       const expectedChallenge = getChallenge(userId, 'registration');
       if (!expectedChallenge) {
         res.status(400).json({ error: 'No pending registration challenge found' });
-        return;
-      }
-
-      const existingPasskeys = await getPasskeysByUserId(db, userId);
-      if (existingPasskeys.length > 0 && !mayManagePasskeys(req, userId)) {
-        clearChallenge(userId, 'registration');
-        res.status(403).json({ error: 'A passkey is already set up. Sign in before adding another device.' });
         return;
       }
 
@@ -200,7 +152,7 @@ export function createAuthRouter(db: Database): Router {
   // 3. Generate Login / Authentication Options
   router.post('/login-options', async (req: Request, res: Response) => {
     try {
-      const userId = getRegistrationUserId(req);
+      const { userId = 'user_meena' } = req.body;
       const userPasskeys = await getPasskeysByUserId(db, userId);
 
       const options = await generateAuthenticationOptions({
@@ -223,8 +175,7 @@ export function createAuthRouter(db: Database): Router {
   // 4. Verify Login / Authentication Response
   router.post('/verify-login', async (req: Request, res: Response) => {
     try {
-      const userId = getRegistrationUserId(req);
-      const { response } = req.body;
+      const { userId = 'user_meena', response } = req.body;
       if (!response || !response.id) {
         res.status(400).json({ error: 'Valid WebAuthn authentication response required' });
         return;

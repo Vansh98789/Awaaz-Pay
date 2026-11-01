@@ -10,6 +10,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PROTOTYPE_MODE
+        value: "true"
       - key: DEMO_AUTH_BYPASS
         value: "false"
       - key: DEMO_SKIP_COOLING
@@ -37,6 +39,4 @@ services:
       - key: GROQ_MODEL
         value: openai/gpt-oss-20b
       - key: DATABASE_URL
-        sync: false
-      - key: PASSKEY_SETUP_CODE
         sync: false

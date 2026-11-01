@@ -131,7 +131,7 @@ Create a `.env` file from `.env.example` and fill in the values:
 | `GEMINI_MODEL` | Gemini model identifier | `gemini-3.5-flash` |
 | `GROQ_API_KEY` | Groq API key (optional fallback) | *(from Groq console)* |
 | `GROQ_MODEL` | Groq model identifier | `openai/gpt-oss-20b` |
-| `PASSKEY_SETUP_CODE` | One-time code for registering the first production wallet passkey | *(set privately in Render, then remove after setup)* |
+| `PROTOTYPE_MODE` | Use the shared `user_meena` demo wallet without passkey sign-in; production requires PayPal Sandbox | `false` locally, `true` only for the Render prototype |
 | `LLM_DEMO_CACHE` | Use cached LLM responses for demo; production rejects `true` | `false` |
 | `DEMO_SKIP_COOLING` | Skip contact cooling-off period in local demos only; production rejects `true` | `false` |
 | `DEMO_AUTH_BYPASS` | Bypass WebAuthn in local demos only; production rejects `true` | `false` |

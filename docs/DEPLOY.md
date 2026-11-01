@@ -62,7 +62,7 @@ Under the **Environment Variables** section, click **Add Environment Variable** 
 | `NODE_ENV` | `production` | Enforces production mode |
 | `PORT` | `10000` | Port assigned by Render (automatically mapped) |
 | `PUBLIC_BASE_URL` | `https://awaaz-pay.onrender.com` | Your public Render URL (used for webhooks and logging) |
-| `PASSKEY_SETUP_CODE` | A long, unique one-time value | Enter this in the app once to register the first wallet passkey, then remove it |
+| `PROTOTYPE_MODE` | `true` | Enables the shared `user_meena` demo wallet without sign-in; restricted to the PayPal Sandbox API |
 | `PAYPAL_API_BASE` | `https://api-m.sandbox.paypal.com` | PayPal sandbox base URL |
 | `PAYPAL_CLIENT_ID` | `your_sandbox_client_id` | From PayPal Developer Dashboard |
 | `PAYPAL_CLIENT_SECRET` | `your_sandbox_client_secret` | From PayPal Developer Dashboard |

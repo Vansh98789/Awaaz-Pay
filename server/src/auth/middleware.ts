@@ -14,13 +14,17 @@ declare global {
 }
 
 export function isDemoAuthBypass(): boolean {
-  return process.env.NODE_ENV !== 'production' && process.env.DEMO_AUTH_BYPASS === 'true';
+  return (process.env.NODE_ENV !== 'production' && process.env.DEMO_AUTH_BYPASS === 'true')
+    || (process.env.NODE_ENV === 'production' && process.env.PROTOTYPE_MODE === 'true');
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   // Check DEMO_AUTH_BYPASS environment flag
   if (isDemoAuthBypass()) {
-    req.user = { id: (req.query.userId as string) || req.body?.userId || 'user_meena' };
+    const userId = process.env.NODE_ENV === 'production'
+      ? 'user_meena'
+      : (req.query.userId as string) || req.body?.userId || 'user_meena';
+    req.user = { id: userId };
     next();
     return;
   }

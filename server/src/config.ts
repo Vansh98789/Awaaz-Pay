@@ -26,7 +26,6 @@ const envSchema = z.object({
   PAYPAL_SANDBOX_RECEIVER_EMAIL: optionalEmail,
   FAMILY_DASHBOARD_EMAIL: optionalEmail,
   FAMILY_DASHBOARD_PASSWORD: z.string().optional(),
-  PASSKEY_SETUP_CODE: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
@@ -35,6 +34,7 @@ const envSchema = z.object({
   LLM_DEMO_CACHE: z.enum(['true', 'false']).default('false'),
   DEMO_AUTH_BYPASS: z.enum(['true', 'false']).default('false'),
   DEMO_SKIP_COOLING: z.enum(['true', 'false']).default('false'),
+  PROTOTYPE_MODE: z.enum(['true', 'false']).default('false'),
   DATABASE_URL: z.string().url(),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV === 'production' && env.DEMO_AUTH_BYPASS === 'true') {
@@ -45,6 +45,10 @@ const envSchema = z.object({
   }
   if (env.NODE_ENV === 'production' && env.LLM_DEMO_CACHE === 'true') {
     ctx.addIssue({ code: 'custom', path: ['LLM_DEMO_CACHE'], message: 'Must be false in production; cached demo responses are not suitable for real use.' });
+  }
+  if (env.NODE_ENV === 'production' && env.PROTOTYPE_MODE === 'true'
+    && [env.PAYPAL_BASE_URL, env.PAYPAL_API_BASE].some((url) => new URL(url).hostname !== 'api-m.sandbox.paypal.com')) {
+    ctx.addIssue({ code: 'custom', path: ['PAYPAL_API_BASE'], message: 'Prototype mode is only allowed with the PayPal Sandbox API.' });
   }
 });
 
