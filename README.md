@@ -128,9 +128,10 @@ Create a `.env` file from `.env.example` and fill in the values:
 | `PAYPAL_SANDBOX_MERCHANT_EMAIL` | Sandbox merchant account email | *(sandbox personal account)* |
 | `PAYPAL_SANDBOX_RECEIVER_EMAIL` | Sandbox receiver account email | *(sandbox personal account)* |
 | `GEMINI_API_KEY` | Google AI Studio API key | *(from AI Studio)* |
-| `GEMINI_MODEL` | Gemini model identifier | `gemini-1.5-flash` |
+| `GEMINI_MODEL` | Gemini model identifier | `gemini-3.5-flash` |
 | `GROQ_API_KEY` | Groq API key (optional fallback) | *(from Groq console)* |
-| `GROQ_MODEL` | Groq model identifier | `llama3-70b-8192` |
+| `GROQ_MODEL` | Groq model identifier | `openai/gpt-oss-20b` |
+| `PASSKEY_SETUP_CODE` | One-time code for registering the first production wallet passkey | *(set privately in Render, then remove after setup)* |
 | `LLM_DEMO_CACHE` | Use cached LLM responses for demo; production rejects `true` | `false` |
 | `DEMO_SKIP_COOLING` | Skip contact cooling-off period in local demos only; production rejects `true` | `false` |
 | `DEMO_AUTH_BYPASS` | Bypass WebAuthn in local demos only; production rejects `true` | `false` |

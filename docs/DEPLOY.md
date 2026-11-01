@@ -62,12 +62,15 @@ Under the **Environment Variables** section, click **Add Environment Variable** 
 | `NODE_ENV` | `production` | Enforces production mode |
 | `PORT` | `10000` | Port assigned by Render (automatically mapped) |
 | `PUBLIC_BASE_URL` | `https://awaaz-pay.onrender.com` | Your public Render URL (used for webhooks and logging) |
+| `PASSKEY_SETUP_CODE` | A long, unique one-time value | Enter this in the app once to register the first wallet passkey, then remove it |
 | `PAYPAL_API_BASE` | `https://api-m.sandbox.paypal.com` | PayPal sandbox base URL |
 | `PAYPAL_CLIENT_ID` | `your_sandbox_client_id` | From PayPal Developer Dashboard |
 | `PAYPAL_CLIENT_SECRET` | `your_sandbox_client_secret` | From PayPal Developer Dashboard |
 | `PAYPAL_WEBHOOK_ID` | `your_webhook_id` | Set after registering webhook in PayPal dashboard |
 | `GEMINI_API_KEY` | `your_gemini_api_key` | Optional for LLM intent parsing |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | Model used when Gemini is configured |
 | `GROQ_API_KEY` | `your_groq_api_key` | Optional LLM fallback key |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` | Model used when Groq is configured |
 
 > **Note on `PUBLIC_BASE_URL`:** When first creating the service, enter the URL assigned by Render (e.g., `https://<service-name>.onrender.com`). You can update this after initial deployment if needed.
 

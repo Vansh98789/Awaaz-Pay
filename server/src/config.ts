@@ -26,6 +26,7 @@ const envSchema = z.object({
   PAYPAL_SANDBOX_RECEIVER_EMAIL: optionalEmail,
   FAMILY_DASHBOARD_EMAIL: optionalEmail,
   FAMILY_DASHBOARD_PASSWORD: z.string().optional(),
+  PASSKEY_SETUP_CODE: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
