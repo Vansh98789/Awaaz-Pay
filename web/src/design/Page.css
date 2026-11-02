@@ -137,39 +137,39 @@
   opacity: 1;
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] {
+[role='dialog'][aria-label='Choose a payment method'] {
   background: var(--bg) !important;
   color: var(--text);
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] > header > div:first-child {
+[role='dialog'][aria-label='Choose a payment method'] > header > div:first-child {
   border-bottom-color: var(--border) !important;
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] h1 {
+[role='dialog'][aria-label='Choose a payment method'] h1 {
   font-size: clamp(2rem, 8vw, 2.75rem) !important;
   line-height: 1.12 !important;
   letter-spacing: -0.04em;
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] > main {
+[role='dialog'][aria-label='Choose a payment method'] > main {
   border: 1px solid var(--border);
   box-shadow: 0 12px 32px rgba(12, 18, 32, 0.18);
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] > header > div[role='status'] {
+[role='dialog'][aria-label='Choose a payment method'] > header > div[role='status'] {
   border-radius: 16px !important;
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] form {
+[role='dialog'][aria-label='Choose a payment method'] form {
   box-shadow: 0 8px 24px rgba(24, 32, 48, 0.06);
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] button {
+[role='dialog'][aria-label='Choose a payment method'] button {
   border-radius: 16px !important;
 }
 
-[role='dialog'][aria-label='QR Code Scanner'] button:hover:not(:disabled) {
+[role='dialog'][aria-label='Choose a payment method'] button:hover:not(:disabled) {
   box-shadow: 0 5px 16px rgba(29, 78, 216, 0.12);
 }
 

@@ -187,7 +187,10 @@ export const App: React.FC = () => {
   }, [themeMode]);
 
   const handleSpeechEnd = useCallback(() => {
-    if (scannerOpenRef.current) return;
+    if (scannerOpenRef.current) {
+      window.dispatchEvent(new Event('awaaz-scanner-speech-ended'));
+      return;
+    }
     if (currentRouteRef.current.path !== 'wallet') return;
     if (autoListenAfterNavigationRef.current || pageVoiceSessionRef.current) {
       autoListenAfterNavigationRef.current = false;
@@ -309,18 +312,20 @@ export const App: React.FC = () => {
 
     // Handle voice answers to confirmation screen if open
     if (pendingConfirmation.isOpen) {
-      const affirmative = /^(?:haan|ha|ji|yes|yeah|y|ok|okay|confirm|confirm payment|pay now|bhej do|bhej dijiye|kar do|theek hai|bilkul|हाँ|हां|जी|कर दो|भेज दो)$/i.test(normalized);
-      const negative = /^(?:nahi|nahin|no|nope|cancel|stop|ruko|mat bhejo|don't pay|do not pay|नहीं|नही|रोक दो|मत भेजो)$/i.test(normalized);
-      if (affirmative) {
-        setIsThinking(false);
-        handleExecutePayment();
-        return;
-      }
+      const affirmative = /\b(?:haan|hanji|han|ha|ji|yes|yeah|yep|yup|sure|okay|ok|confirm|approve|request approval|ask my family|send.*approval|i know)\b/i.test(normalized)
+        || /^(?:y|bilkul|theek hai|bhej do|bhej dijiye|kar do|हाँ|हां|जी|कर दो|भेज दो)$/i.test(normalized);
+      const negative = /\b(?:no|nope|nah|nahi|nahin|cancel|stop|don't|do not|never|not sending|not approving|don't pay|do not pay|don't send|do not send|do not request|cancel approval)\b/i.test(normalized)
+        || /^(?:n|ruko|mat bhejo|नहीं|नही|रोक दो|मत भेजो)$/i.test(normalized);
       if (negative) {
         setPendingConfirmation({ isOpen: false, payeeName: '', amount: 0 });
         const cancelMsg = lang === 'hi-IN' ? 'Payment cancel kar diya gaya.' : 'Payment cancelled.';
         speak(cancelMsg, { lang });
         setIsThinking(false);
+        return;
+      }
+      if (affirmative) {
+        setIsThinking(false);
+        handleExecutePayment();
         return;
       }
       if (pendingConfirmation.isSuccess || pendingConfirmation.isFailed || pendingConfirmation.isPending || pendingConfirmation.isApprovalPending || pendingConfirmation.isBlocked) {
@@ -716,7 +721,7 @@ export const App: React.FC = () => {
 
       if (data.state === 'awaiting_payment_recipient') {
         setAwaitingPaymentRecipient(true);
-        setScannerEmailEntryOpen(/\b(e-?mail|email address)\b/i.test(text) || /ईमेल/.test(text));
+        setScannerEmailEntryOpen(scannerEmailEntryOpen || /\b(e-?mail|email address)\b/i.test(text) || /ईमेल/.test(text) || /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text));
         setIsScannerOpen(true);
         pageVoiceSessionRef.current = true;
         setScanError(null);
@@ -810,6 +815,7 @@ export const App: React.FC = () => {
   const { isListening, isSupported: sttSupported, toggleListening, startListening, stopListening, error } =
     useSpeechRecognition({
       lang,
+      preferConfirmation: conversationState === 'awaiting_scam_answers' || pendingConfirmation.isOpen,
       onResult: handleSpeechResult,
       onError: handleSpeechError,
     });
@@ -818,12 +824,17 @@ export const App: React.FC = () => {
     if (isScannerOpen && isListening) stopListening();
   }, [isScannerOpen, isListening, stopListening]);
 
-  useEffect(() => {
-    startListeningRef.current = startListening;
+  const startWalletListening = useCallback(() => {
+    if (!scannerOpenRef.current) startListening();
   }, [startListening]);
+
+  useEffect(() => {
+    startListeningRef.current = startWalletListening;
+  }, [startWalletListening]);
 
   // Handle start listening haptics
   const handleMicClick = async () => {
+    if (scannerOpenRef.current) return;
     setMicPermissionError(null);
     if (isListening) {
       setIsContinuousVoice(false);
@@ -856,7 +867,7 @@ export const App: React.FC = () => {
           ? 'Microphone taiyaar hai. Ab boliye, main sun rahi hoon.'
           : 'The microphone is ready. Go ahead and speak.';
         setMicPermissionError(message);
-        speak(message, { lang, onEnd: startListening });
+        speak(message, { lang, onEnd: startWalletListening });
       } catch (err) {
         const error = err as Error & { name?: string };
         const message = error.name === 'NotAllowedError'
@@ -878,6 +889,7 @@ export const App: React.FC = () => {
   // Keyboard accessibility: Space or Enter starts and stops listening
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (scannerOpenRef.current) return;
       // Do not intercept keystrokes when focus is inside interactive elements
       if (
         e.target instanceof HTMLInputElement ||
@@ -895,7 +907,7 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isListening]);
+  }, [isListening, isScannerOpen]);
 
   // Execution when user confirms payment
   const handleExecutePayment = async () => {
@@ -1635,7 +1647,50 @@ export const App: React.FC = () => {
         allowEmailRecipient={awaitingPaymentRecipient}
         emailEntryOpen={scannerEmailEntryOpen}
         onEmailEntryOpenChange={setScannerEmailEntryOpen}
-        onUseEmail={(email) => handleSpeechResult(email, true)}
+        onUseEmail={async (email, amount) => {
+          if (amount !== undefined) {
+            // The email + amount form is an explicit request to route this new
+            // recipient payment to family review. Create the guarded payment
+            // and request approval without leaving the scanner page.
+            const prepareResponse = await fetch('/api/payments/prepare', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                payee: email,
+                amount,
+                currency: 'USD',
+                requireGuardianApproval: true,
+              }),
+            });
+            const prepared = await prepareResponse.json() as { transactionId?: string; error?: string };
+            if (!prepareResponse.ok || !prepared.transactionId) {
+              throw new Error(prepared.error || 'Could not prepare the family approval request.');
+            }
+
+            const approvalResponse = await fetch('/api/payments/confirm', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ transactionId: prepared.transactionId, userConfirmed: true }),
+            });
+            const approval = await approvalResponse.json() as { status?: string; error?: string; message?: string };
+            if (!approvalResponse.ok || approval.status !== 'awaiting_approval') {
+              throw new Error(approval.error || approval.message || 'The family approval request could not be confirmed. Check payment status before retrying.');
+            }
+            return;
+          }
+
+          // Email collection is finished. Hand the conversation back to Wallet
+          // before starting the safety interview so the scanner recognizer
+          // cannot compete with the wallet microphone for yes/no answers.
+          setIsScannerOpen(false);
+          scannerOpenRef.current = false;
+          setScannerEmailEntryOpen(false);
+          pageVoiceSessionRef.current = true;
+          autoListenAfterNavigationRef.current = true;
+          return handleSpeechResult(email, true);
+        }}
         onStartEmailPayment={(utterance) => handleSpeechResult(utterance, true)}
         onReturnHome={() => {
           stopListening();

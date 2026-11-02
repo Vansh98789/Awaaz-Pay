@@ -6,8 +6,42 @@ import type {
 } from '../types/speech.d.ts';
 import { triggerHaptic } from './useHaptics.js';
 
+let listeningAudioContext: AudioContext | null = null;
+
+function playListeningCue(): void {
+  if (typeof window === 'undefined' || !window.AudioContext) return;
+  try {
+    listeningAudioContext ??= new window.AudioContext();
+    const context = listeningAudioContext;
+    const play = () => {
+      const startAt = context.currentTime;
+      // Two soft rising notes give a clear, short signal that the microphone
+      // has opened, including when it resumes hands-free after the assistant.
+      for (const [frequency, offset] of [[660, 0], [880, 0.12]] as const) {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(frequency, startAt + offset);
+        gain.gain.setValueAtTime(0.0001, startAt + offset);
+        gain.gain.exponentialRampToValueAtTime(0.055, startAt + offset + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + offset + 0.085);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(startAt + offset);
+        oscillator.stop(startAt + offset + 0.09);
+      }
+    };
+    if (context.state === 'suspended') void context.resume().then(play).catch(() => undefined);
+    else play();
+  } catch {
+    // Haptic and visible listening states remain available if audio is blocked.
+  }
+}
+
 export interface UseSpeechRecognitionOptions {
   lang?: string;
+  preferEmail?: boolean;
+  preferConfirmation?: boolean;
   onResult?: (text: string) => void;
   onError?: (error: string, friendlyMsg: string) => void;
 }
@@ -25,7 +59,7 @@ export interface UseSpeechRecognitionReturn {
 export function useSpeechRecognition(
   options: UseSpeechRecognitionOptions = {}
 ): UseSpeechRecognitionReturn {
-  const { lang = 'hi-IN', onResult, onError } = options;
+  const { lang = 'hi-IN', preferEmail = false, preferConfirmation = false, onResult, onError } = options;
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -35,12 +69,16 @@ export function useSpeechRecognition(
   const onResultRef = useRef(onResult);
   const onErrorRef = useRef(onError);
   const langRef = useRef(lang);
+  const preferEmailRef = useRef(preferEmail);
+  const preferConfirmationRef = useRef(preferConfirmation);
 
   useEffect(() => {
     onResultRef.current = onResult;
     onErrorRef.current = onError;
     langRef.current = lang;
-  }, [onResult, onError, lang]);
+    preferEmailRef.current = preferEmail;
+    preferConfirmationRef.current = preferConfirmation;
+  }, [onResult, onError, lang, preferEmail, preferConfirmation]);
 
   const createRecognition = useCallback(() => {
     const SpeechRecognitionClass =
@@ -68,20 +106,40 @@ export function useSpeechRecognition(
     const recognition = new SpeechRecognitionClass();
     recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = preferEmailRef.current || preferConfirmationRef.current ? 5 : 1;
     recognition.lang = langRef.current;
 
     recognition.onstart = () => {
       setIsListening(true);
       setError(null);
       triggerHaptic('listeningStart');
+      playListeningCue();
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let finalTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
+          const result = event.results[i];
+          let chosenTranscript = result[0].transcript;
+          if (preferEmailRef.current) {
+            for (let alternativeIndex = 0; alternativeIndex < result.length; alternativeIndex++) {
+              const candidate = result[alternativeIndex].transcript;
+              if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(candidate)) {
+                chosenTranscript = candidate;
+                break;
+              }
+            }
+          } else if (preferConfirmationRef.current) {
+            for (let alternativeIndex = 0; alternativeIndex < result.length; alternativeIndex++) {
+              const candidate = result[alternativeIndex].transcript;
+              if (/\b(?:yes|yeah|yep|yup|no|nope|nah|haan|han|nahi|nahin|हाँ|हां|नहीं|नही)\b/i.test(candidate)) {
+                chosenTranscript = candidate;
+                break;
+              }
+            }
+          }
+          finalTranscript += chosenTranscript;
         } else {
           setTranscript(event.results[i][0].transcript);
         }

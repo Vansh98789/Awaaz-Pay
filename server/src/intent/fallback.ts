@@ -1,6 +1,6 @@
 import type { IntentResult, ConversationState } from './types.js';
 
-const YES = /\b(haan|ha|ji|theek\s*hai|kar\s*do|bilkul|yes|ok|okay|sure)\b/i;
+const YES = /\b(haan|hanji|han|ha|ji|theek\s*hai|kar\s*do|bilkul|yes|yeah|yep|yup|absolutely|i\s+(?:do|know)|sure|ok|okay)\b/i;
 const NO = /\b(nahi|nahin|na|mat\s*karo|ruko|cancel|band\s*karo|no|nope|stop)\b/i;
 const BALANCE = /\b(balance|paisa|kitna|bacha|wallet|account|funds?)\b/i;
 const HISTORY = /\b(history|transactions?|kya\s*hua|dikhao|recent|last|hafte|mahine|week|happened|past|pichle)\b/i;

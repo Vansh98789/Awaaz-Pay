@@ -33,8 +33,8 @@ import {
 
 function askGuardianGatedConfirmation(payee: string, amount: number, lang: 'hi' | 'en'): string {
   return lang === 'hi'
-    ? `${payee} ko ${amount.toFixed(2)} US dollars bhejne hain. Pehle main aapki family se approval loonga. Family approve karegi tabhi PayPal Sandbox payment bheji jayegi. Kya main approval request bhejun?`
-    : `You want to send $${amount.toFixed(2)} to ${payee}. I will first ask your family to approve. PayPal Sandbox will send the payment only after they approve. Shall I request approval?`;
+    ? `${payee} ko ${amount.toFixed(2)} US dollars bhejne hain. Payment abhi nahi bheja jayega. Pehle family ko approval request bhejunga. Haan bolne par request jayegi; family approve karegi tabhi payment bheji jayegi. Kya main approval request bhejun?`
+    : `You want to send $${amount.toFixed(2)} to ${payee}. The payment will not be sent now. I will first send your family an approval request. Say yes to send that request; payment can happen only after they approve. Shall I send the request?`;
 }
 
 function extractNewPayeeLabel(text: string): string | null {
@@ -469,6 +469,41 @@ export async function processConversation(
 
         replyText = templates[lang].scam_blocked_interruption;
         resetSession(sessionId);
+      } else if (
+        session.isNewPayee &&
+        /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(session.pendingPayeeRaw || '')
+      ) {
+        // Email and amount were already collected in the scanner form. After
+        // the scam interview, continue with that captured email instead of
+        // sending the user back to recipient entry and reopening the scanner.
+        const capturedEmail = session.pendingPayeeRaw!.match(
+          /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
+        )![0];
+        const prep = await preparePayment(db, {
+          userId,
+          payee: capturedEmail,
+          amount: session.pendingAmount!,
+          scamRisk: finalRisk,
+          requireGuardianApproval: true,
+        });
+        if (prep.decision.action === 'block') {
+          resetSession(sessionId);
+          replyText = templates[lang].payment_blocked(prep.decision.spoken_reason);
+        } else {
+          updateSession(sessionId, {
+            state: 'awaiting_confirmation',
+            currentTransactionId: prep.transactionId,
+            pendingPayeeName: prep.payee,
+            pendingPayeeRaw: capturedEmail,
+            pendingAmount: prep.amount,
+            isNewPayee: true,
+            scamInterviewStep: undefined,
+            unclearAttempts: 0,
+          });
+          replyText = prep.decision.action === 'need_guardian_approval'
+            ? askGuardianGatedConfirmation(prep.payee, prep.amount, lang)
+            : templates[lang].ask_confirmation(prep.payee, prep.amount);
+        }
       } else if (session.isNewPayee) {
         updateSession(sessionId, {
           state: 'awaiting_payment_recipient',

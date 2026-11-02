@@ -43,6 +43,24 @@ export async function parseIntent(
   contacts: string[],
   state: ConversationState,
 ): Promise<IntentResult> {
+  // The email payment form already collected these validated fields. Avoid an
+  // LLM round trip for this exact structured handoff; it still enters the same
+  // conversation flow and scam interview before any payment confirmation.
+  const typedEmailPayment = transcript.trim().match(
+    /^send\s+\$?(\d+(?:\.\d{1,2})?)\s+to\s+([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})$/i,
+  );
+  if (typedEmailPayment) {
+    return {
+      intent: 'send_money',
+      recipient_alias: typedEmailPayment[2],
+      amount: Number(typedEmailPayment[1]),
+      language: detectLang(transcript),
+      confidence: 1,
+      scam_cues: [],
+      clarifying_question: null,
+    };
+  }
+
   if (state === 'awaiting_confirmation' || state === 'awaiting_scam_answers') {
     const quick = quickConfirmation(transcript);
     if (quick !== null) {
