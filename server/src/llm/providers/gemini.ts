@@ -1,13 +1,4 @@
-const TIMEOUT_MS = 15000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms),
-    ),
-  ]);
-}
+const TIMEOUT_MS = 8000;
 
 function cleanModelName(model: string): string {
   let clean = model.trim().replace(/^['"]|['"]$/g, '');
@@ -35,14 +26,12 @@ export async function callGemini(
     generationConfig: { response_mime_type: 'application/json' },
   };
 
-  const res = await withTimeout(
-    fetch(url, {
+  const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }),
-    TIMEOUT_MS,
-  );
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
 
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);

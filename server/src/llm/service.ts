@@ -15,13 +15,6 @@ interface Provider {
 function buildProviders(): Provider[] {
   const providers: Provider[] = [];
 
-  if (config.GEMINI_API_KEY && config.GEMINI_MODEL) {
-    providers.push({
-      name: 'gemini',
-      call: (s, u) => callGemini(config.GEMINI_API_KEY!, config.GEMINI_MODEL!, s, u),
-    });
-  }
-
   if (
     config.GROQ_API_KEY &&
     config.GROQ_MODEL &&
@@ -33,6 +26,13 @@ function buildProviders(): Provider[] {
     });
   }
 
+  if (config.GEMINI_API_KEY && config.GEMINI_MODEL) {
+    providers.push({
+      name: 'gemini',
+      call: (s, u) => callGemini(config.GEMINI_API_KEY!, config.GEMINI_MODEL!, s, u),
+    });
+  }
+
   return providers;
 }
 
@@ -41,19 +41,8 @@ async function tryProvider(
   systemPrompt: string,
   userText: string,
 ): Promise<string> {
-  // One retry on transient errors before falling back to next provider
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await provider.call(systemPrompt, userText);
-    } catch (err) {
-      lastErr = err;
-      if (attempt === 0) {
-        console.warn(`[llm] ${provider.name} attempt 1 failed: ${(err as Error).message}, retrying`);
-      }
-    }
-  }
-  throw lastErr;
+  // Fail over immediately instead of repeating a slow or invalid request.
+  return provider.call(systemPrompt, userText);
 }
 
 export async function completeJson<T>(options: CompleteJsonOptions<T>): Promise<T> {

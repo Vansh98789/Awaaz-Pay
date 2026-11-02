@@ -8,6 +8,7 @@ export function createConverseRouter(db: Database): Router {
   const router = Router();
 
   router.post('/converse', requireAuth, async (req: Request, res: Response) => {
+    const startedAt = Date.now();
     try {
       const userId = req.user?.id || req.body?.userId || 'user_meena';
       const { text, sessionId = crypto.randomUUID(), lang } = req.body;
@@ -18,11 +19,13 @@ export function createConverseRouter(db: Database): Router {
       }
 
       const response = await processConversation(db, sessionId, text, userId, lang);
+      console.info(`[api/converse] complete state=${response.state} duration_ms=${Date.now() - startedAt}`);
       res.status(200).json({
         sessionId,
         ...response,
       });
     } catch (err) {
+      console.error(`[api/converse] failed duration_ms=${Date.now() - startedAt}: ${(err as Error).message}`);
       res.status(500).json({ error: (err as Error).message });
     }
   });

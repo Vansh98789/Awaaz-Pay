@@ -1,13 +1,4 @@
-const TIMEOUT_MS = 8000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms),
-    ),
-  ]);
-}
+const TIMEOUT_MS = 6000;
 
 export async function callGroq(
   apiKey: string,
@@ -25,17 +16,15 @@ export async function callGroq(
     temperature: 0,
   };
 
-  const res = await withTimeout(
-    fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
-    }),
-    TIMEOUT_MS,
-  );
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
 
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);
