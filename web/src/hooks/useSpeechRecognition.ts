@@ -40,6 +40,8 @@ function playListeningCue(): void {
 
 export interface UseSpeechRecognitionOptions {
   lang?: string;
+  continuous?: boolean;
+  finalizeDelayMs?: number;
   preferEmail?: boolean;
   preferConfirmation?: boolean;
   onResult?: (text: string) => void;
@@ -59,7 +61,7 @@ export interface UseSpeechRecognitionReturn {
 export function useSpeechRecognition(
   options: UseSpeechRecognitionOptions = {}
 ): UseSpeechRecognitionReturn {
-  const { lang = 'hi-IN', preferEmail = false, preferConfirmation = false, onResult, onError } = options;
+  const { lang = 'hi-IN', continuous = false, finalizeDelayMs = 1800, preferEmail = false, preferConfirmation = false, onResult, onError } = options;
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +73,10 @@ export function useSpeechRecognition(
   const langRef = useRef(lang);
   const preferEmailRef = useRef(preferEmail);
   const preferConfirmationRef = useRef(preferConfirmation);
+  const continuousRef = useRef(continuous);
+  const finalizeDelayRef = useRef(finalizeDelayMs);
+  const pendingFinalRef = useRef('');
+  const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     onResultRef.current = onResult;
@@ -78,7 +84,9 @@ export function useSpeechRecognition(
     langRef.current = lang;
     preferEmailRef.current = preferEmail;
     preferConfirmationRef.current = preferConfirmation;
-  }, [onResult, onError, lang, preferEmail, preferConfirmation]);
+    continuousRef.current = continuous;
+    finalizeDelayRef.current = finalizeDelayMs;
+  }, [onResult, onError, lang, preferEmail, preferConfirmation, continuous, finalizeDelayMs]);
 
   const createRecognition = useCallback(() => {
     const SpeechRecognitionClass =
@@ -104,7 +112,7 @@ export function useSpeechRecognition(
     }
 
     const recognition = new SpeechRecognitionClass();
-    recognition.continuous = false;
+    recognition.continuous = continuousRef.current;
     recognition.interimResults = true;
     recognition.maxAlternatives = preferEmailRef.current || preferConfirmationRef.current ? 5 : 1;
     recognition.lang = langRef.current;
@@ -149,7 +157,18 @@ export function useSpeechRecognition(
         const clean = finalTranscript.trim();
         setTranscript(clean);
         triggerHaptic('understood');
-        if (onResultRef.current) {
+        if (continuousRef.current) {
+          pendingFinalRef.current = [pendingFinalRef.current, clean].filter(Boolean).join(' ').trim();
+          if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+          finalizeTimerRef.current = setTimeout(() => {
+            finalizeTimerRef.current = null;
+            const completeUtterance = pendingFinalRef.current.trim();
+            pendingFinalRef.current = '';
+            if (!completeUtterance) return;
+            try { recognition.stop(); } catch { /* Recognition may already have stopped. */ }
+            onResultRef.current?.(completeUtterance);
+          }, finalizeDelayRef.current);
+        } else if (onResultRef.current) {
           onResultRef.current(clean);
         }
       }
@@ -239,6 +258,9 @@ export function useSpeechRecognition(
     setIsSupported(true);
 
     return () => {
+      if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+      finalizeTimerRef.current = null;
+      pendingFinalRef.current = '';
       if (recognitionRef.current) {
         try {
           recognitionRef.current.onstart = null;
@@ -255,6 +277,9 @@ export function useSpeechRecognition(
   }, []);
 
   const startListening = useCallback(() => {
+    if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+    finalizeTimerRef.current = null;
+    pendingFinalRef.current = '';
     setError(null);
     setTranscript('');
     try {

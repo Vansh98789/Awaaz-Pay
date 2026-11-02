@@ -815,6 +815,8 @@ export const App: React.FC = () => {
   const { isListening, isSupported: sttSupported, toggleListening, startListening, stopListening, error } =
     useSpeechRecognition({
       lang,
+      continuous: true,
+      finalizeDelayMs: 2000,
       preferConfirmation: conversationState === 'awaiting_scam_answers' || pendingConfirmation.isOpen,
       onResult: handleSpeechResult,
       onError: handleSpeechError,
@@ -1588,7 +1590,7 @@ export const App: React.FC = () => {
         {sttSupported && (
           <p id="wallet-mic-instructions" className="wallet-mic-instructions">
             {isListening
-              ? (lang === 'hi-IN' ? 'मैं सुन रही हूँ। बोलना पूरा होने पर रुकने के लिए माइक दबाएँ।' : 'Listening now. Tap the microphone when you are finished speaking.')
+              ? (lang === 'hi-IN' ? 'मैं सुन रही हूँ। पूरा बोलें; बोलना रुकने के बाद थोड़ी देर इंतज़ार करूँगी। रोकने के लिए माइक दबाएँ।' : 'Listening now. Finish speaking; I will wait through short pauses. Tap the microphone to stop.')
               : (lang === 'hi-IN' ? 'बात करने के लिए माइक दबाएँ। फिर बोलें। कीबोर्ड से Enter या Space दबाएँ।' : 'Tap the microphone, then speak. With a keyboard, press Enter or Space.')}
           </p>
         )}
