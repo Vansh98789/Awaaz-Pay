@@ -28,13 +28,19 @@ export function useSpeechSynthesis(
 ): UseSpeechSynthesisReturn {
   const {
     defaultLang = 'en-IN',
-    defaultSpeed = 1.0,
+    defaultSpeed = 1.25,
     outputMode: initialMode = 'voice',
     onEnd,
   } = options;
 
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [speed, setSpeedState] = useState(defaultSpeed);
+  const [speed, setSpeedState] = useState(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = Number(localStorage.getItem('awaaz_speech_speed'));
+      if (Number.isFinite(saved) && saved >= 0.6 && saved <= 1.6) return saved;
+    }
+    return defaultSpeed;
+  });
   const [outputMode, setOutputModeState] = useState<'voice' | 'screen_reader'>(() => {
     if (typeof localStorage !== 'undefined') {
       const saved = localStorage.getItem('awaaz_output_mode');
@@ -178,8 +184,11 @@ export function useSpeechSynthesis(
   }, [speak]);
 
   const setSpeed = useCallback((newSpeed: number) => {
-    const clamped = Math.max(0.5, Math.min(2.0, newSpeed));
+    const clamped = Math.max(0.6, Math.min(1.6, newSpeed));
     setSpeedState(clamped);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('awaaz_speech_speed', String(clamped));
+    }
   }, []);
 
   return {

@@ -205,7 +205,7 @@ export const App: React.FC = () => {
   const { speak, repeatLastReply, isSpeaking, speed, setSpeed, outputMode, setOutputMode } =
     useSpeechSynthesis({
       defaultLang: lang,
-      defaultSpeed: 1.0,
+      defaultSpeed: 1.25,
       onEnd: handleSpeechEnd,
     });
 
@@ -580,8 +580,8 @@ export const App: React.FC = () => {
             ? 'Theme, language, bolne ki raftaar, voice mode, screen reader mode, ya hands-free badalne ke liye uska naam boliye. Settings band karne ke liye settings band karo boliye.'
             : 'Say theme, language, speech speed, voice mode, screen reader mode, or hands-free to change it. Say close settings when you are done.')
           : lang === 'hi-IN'
-          ? 'Payment ke liye naam aur dollar boliye. Scanner kholo, PayPal balance batao, hisaab sunao, family portal kholo, dobara bolo, Hindi ya English bolo, dheere bolo, settings kholo, ya ghar jao.'
-          : 'Say what you want: send dollars to a contact, open scanner, check PayPal balance, read history, open the family portal, repeat what I said, switch language, speak slower, open settings, or go home.';
+          ? 'Naam aur rakam bolkar payment karein, ya balance aur haal ke payments poochhein. QR ke liye scanner boliye. Aur options ke liye help boliye.'
+          : 'Say a name and amount to pay, or ask for your balance or recent payments. Say “scanner” for a QR code, or “help” for more options.';
       } else if (command === 'open_scanner') {
         setIsScannerOpen(true);
         setIsSettingsOpen(false);
@@ -1499,8 +1499,9 @@ export const App: React.FC = () => {
         </StatusBanner>
       )}
 
-      {/* Very large circular mic button (~60% viewport width, max 280px) surrounded by DotRing */}
+      {/* Large voice control with a visible and screen-reader-readable usage cue. */}
       <section
+        aria-label={lang === 'hi-IN' ? 'आवाज़ से बातचीत के नियंत्रण' : 'Voice conversation controls'}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -1517,13 +1518,19 @@ export const App: React.FC = () => {
               : 'Web Speech API is not supported in this browser. Please use Chrome or Edge.'}
           </StatusBanner>
         ) : (
-          <DotRing state={ringState} radius={115}>
+          <DotRing
+            state={ringState}
+            radius={typeof window === 'undefined' ? 145 : Math.min(166, Math.max(100, window.innerWidth * 0.36))}
+          >
             <button
               type="button"
+              className="wallet-mic-button"
               onClick={handleMicClick}
+              aria-pressed={isListening}
+              aria-describedby="wallet-mic-instructions"
               style={{
-                width: 'min(60vw, 240px)',
-                height: 'min(60vw, 240px)',
+                width: 'min(74vw, 300px)',
+                height: 'min(74vw, 300px)',
                 borderRadius: '50%',
                 backgroundColor: isListening ? 'var(--accent)' : 'var(--surface)',
                 color: isListening ? 'var(--accent-text)' : 'var(--text)',
@@ -1544,8 +1551,8 @@ export const App: React.FC = () => {
               }
             >
               <svg
-                width="48"
-                height="48"
+                width="56"
+                height="56"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -1564,6 +1571,14 @@ export const App: React.FC = () => {
               </span>
             </button>
           </DotRing>
+        )}
+
+        {sttSupported && (
+          <p id="wallet-mic-instructions" className="wallet-mic-instructions">
+            {isListening
+              ? (lang === 'hi-IN' ? 'मैं सुन रही हूँ। बोलना पूरा होने पर रुकने के लिए माइक दबाएँ।' : 'Listening now. Tap the microphone when you are finished speaking.')
+              : (lang === 'hi-IN' ? 'बात करने के लिए माइक दबाएँ। फिर बोलें। कीबोर्ड से Enter या Space दबाएँ।' : 'Tap the microphone, then speak. With a keyboard, press Enter or Space.')}
+          </p>
         )}
 
         {(error || scanError || micPermissionError) && (
@@ -1716,8 +1731,8 @@ export const App: React.FC = () => {
               <input id="speech-speed" type="range" min="0.6" max="1.6" step="0.1" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} aria-valuetext={`${speed.toFixed(1)} times`} style={{ width: '100%', accentColor: 'var(--accent)' }} />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
                 <button type="button" style={settingButtonStyle(false)} onClick={() => setSpeed(0.8)}>{lang === 'hi-IN' ? 'धीमी' : 'Slower'}</button>
-                <button type="button" style={settingButtonStyle(speed === 1)} onClick={() => setSpeed(1)}>{lang === 'hi-IN' ? 'सामान्य' : 'Normal'}</button>
-                <button type="button" style={settingButtonStyle(false)} onClick={() => setSpeed(1.3)}>{lang === 'hi-IN' ? 'तेज़' : 'Faster'}</button>
+                <button type="button" aria-pressed={speed === 1} style={settingButtonStyle(speed === 1)} onClick={() => setSpeed(1)}>{lang === 'hi-IN' ? 'सामान्य · 1.0×' : 'Normal · 1.0×'}</button>
+                <button type="button" aria-pressed={speed === 1.5} style={settingButtonStyle(speed === 1.5)} onClick={() => setSpeed(1.5)}>{lang === 'hi-IN' ? 'तेज़ · 1.5×' : 'Fast · 1.5×'}</button>
               </div>
             </section>
             <section aria-labelledby="output-setting-title" style={{ display: 'grid', gap: '0.6rem', padding: '1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card, 16px)' }}>

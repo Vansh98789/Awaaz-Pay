@@ -1,41 +1,26 @@
+/* Legacy component styles share the canonical accessible design tokens. */
 :root {
-  color-scheme: dark;
-  --bg-primary: #0a0a0c;
-  --bg-surface: #141419;
-  --bg-card: #1c1c24;
-  --text-primary: #ffffff;
-  --text-secondary: #a1a1aa;
-  --accent-cyan: #38bdf8;
-  --accent-cyan-glow: rgba(56, 189, 248, 0.4);
-  --accent-red: #ef4444;
-  --accent-red-glow: rgba(239, 68, 68, 0.45);
-  --accent-green: #22c55e;
-  --accent-green-glow: rgba(34, 197, 94, 0.4);
-  --border-subtle: #27272a;
-  --focus-ring: #60a5fa;
-}
-
-:root[data-theme='light'] {
   color-scheme: light;
-  --bg-primary: #f8f8f6;
-  --bg-surface: #f0f0ed;
-  --bg-card: #ffffff;
-  --text-primary: #111111;
-  --text-secondary: #4a4a4a;
-  --accent-cyan: #1d4ed8;
-  --accent-cyan-glow: rgba(29, 78, 216, 0.2);
-  --accent-red: #b42318;
-  --accent-red-glow: rgba(180, 35, 24, 0.2);
-  --accent-green: #0f7b3f;
-  --accent-green-glow: rgba(15, 123, 63, 0.2);
-  --border-subtle: #d6d6d2;
-  --focus-ring: #1d4ed8;
+  --bg-primary: var(--bg);
+  --bg-surface: var(--surface);
+  --bg-card: var(--surface);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-muted);
+  --accent-cyan: var(--accent);
+  --accent-cyan-glow: color-mix(in srgb, var(--accent) 20%, transparent);
+  --accent-red: var(--danger);
+  --accent-red-glow: color-mix(in srgb, var(--danger) 20%, transparent);
+  --accent-green: var(--success);
+  --accent-green-glow: color-mix(in srgb, var(--success) 20%, transparent);
+  --border-subtle: var(--border);
+  --focus-ring: var(--accent);
 }
 
-:root[data-theme='dark'] {
-  color-scheme: dark;
-}
+:root[data-theme='dark'] { color-scheme: dark; }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) { color-scheme: dark; }
+}
 * {
   box-sizing: border-box;
   margin: 0;
@@ -46,17 +31,27 @@
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-family: var(--font-sans);
+  line-height: 1.45;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   -webkit-font-smoothing: antialiased;
 }
 
 #root {
   min-height: 100vh;
+  width: 100%;
   display: flex;
   flex-direction: column;
+}
+
+button, input, select, textarea { font: inherit; }
+button { touch-action: manipulation; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 4px solid var(--focus-ring);
+  outline-offset: 3px;
 }
 
 .app-container {
