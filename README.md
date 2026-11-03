@@ -1,205 +1,171 @@
-# 🔊 Awaaz Pay
+# Awaaz Pay
 
-**A voice-first wallet for blind and low-literacy users in India.**
+### A voice-first wallet designed to make digital payments easier to understand and safer to navigate.
 
-> Built for the PayPal AI Hackathon
+Awaaz Pay helps blind, low-vision, low-literacy, and first-time digital payment users interact with a wallet through spoken instructions, clear readbacks, and large, high-contrast controls. Users can speak naturally in English, Hindi, or Hinglish, review payment details, and ask family to approve payments to new recipients.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
----
-
-## The Problem
-
-**350 million+ adults in India are illiterate or barely literate.** Standard UPI and banking apps rely on complex text-based UIs — small fonts, nested menus, English-heavy interfaces — that exclude the people who need digital payments the most.
-
-**Awaaz Pay replaces the text UI with conversational Hindi/English voice.** Users simply talk to make payments, check balances, and manage money. No reading required. No typing required. Just speak.
+**Built for the PayPal AI Hackathon.** PayPal Sandbox handles payment flows; AI helps interpret spoken intent. A deterministic rules engine controls payment decisions. The project is a prototype: it does not move real money.
 
 ---
 
-## Features
+## Why Awaaz Pay
 
-- 🎙️ **Voice-first interface** in Hindi, Hinglish, and English (Web Speech API)
-- 🧠 **Natural language intent parsing** (Gemini 1.5 Flash + Groq Llama 3 fallback)
-- 🔒 **Deterministic rules engine** — the LLM never moves money
-- 🛡️ **Multi-tier trust model**
-  - **Tier 1:** Trusted contacts (pre-approved, instant payments)
-  - **Tier 2:** Verified merchants (standard verification)
-  - **Tier 3:** New/unknown payees (requires guardian approval)
-- 🚨 **Anti-scam safety interview** with real-time signal detection
-- 🔑 **WebAuthn passkey biometric login** with voice-guided setup
-- 🗣️ **Voice challenge** (secondary risk signal only, not a hard lock)
-- 💳 **PayPal sandbox integration** (Orders API, Payouts API, Invoicing/QR)
-- 📷 **Merchant QR scanning** with BarcodeDetector + jsQR fallback and spoken guidance
-- 👨‍👩‍👧 **Guardian-assisted onboarding wizard**
-- ⏳ **Contact cooling-off period** (24h, configurable)
-- ✅ **Guardian approval workflow** with one-tap approve/deny
-- 📊 **Balance check, 7-day history summary, payment explanation** — all spoken, all from code-computed facts (LLM never invents numbers)
-- 📋 **AG Grid Community family dashboard** with risk-highlighted rows
-- 📡 **Offline detection** with spoken alerts
-- 📱 **PWA-ready** (Vite PWA plugin)
+Many wallet experiences assume users can comfortably read small text, navigate dense screens, and interpret payment details without help. Awaaz Pay makes voice the primary way to interact, while keeping visible controls available for people who prefer to tap or type.
 
----
+Its central design idea is simple: **the app should explain what it understood, apply safety rules, and ask for confirmation before a payment proceeds.**
+
+## What you can do
+
+- **Talk to the wallet:** ask to check the wallet balance, review activity, navigate, or start a payment in English, Hindi, or Hinglish.
+- **Pay by voice:** name a saved contact and amount. Awaaz Pay reads back the payment and asks for confirmation.
+- **Pay by QR or PayPal Sandbox email:** choose a QR scan or enter a recipient email. Email payments to new personal recipients are sent to the family approval flow; submitting the request does not itself send money.
+- **Review and approve carefully:** payment details are shown and spoken before a confirmed payment can proceed.
+- **Use family safeguards:** new recipients, unusual activity, spending limits, rapid payments, and detected scam risk can require family review or block a payment.
+- **Use the family dashboard:** review activity in a searchable, filterable AG Grid table with status and risk indicators; manage approval requests and contacts.
+- **Create and scan merchant QR codes:** the merchant view supports PayPal invoice QR creation where available and an Awaaz Pay QR fallback for the sandbox demo.
+- **Use accessible interaction options:** large touch targets, high-contrast themes, text paired with speech, keyboard-friendly controls, live announcements, speech-speed settings, and an audio cue when the microphone starts listening.
+- **Install as a PWA:** use the web app on a supported device and browser.
+
+## How a payment is protected
+
+1. The user speaks or enters the recipient and amount.
+2. The app resolves the recipient and gathers relevant payment and risk context.
+3. AI may interpret the user's language into a structured intent. It does not authorize or execute a transfer.
+4. The deterministic rules engine checks recipient status, spending limits, payment velocity, unusual amounts, and scam signals.
+5. Awaaz Pay explains the proposed payment and asks for confirmation. Payments that require family review are held for approval.
+6. Only an allowed and confirmed payment reaches the PayPal Sandbox payout flow. The result is recorded in the wallet ledger.
+
+High scam risk or a blocked recipient can stop a payment. First-time personal recipients require family approval. Other conditions—such as an over-limit or unusual payment—can also require approval. A timeout or unclear result should be checked in Recent Activity before retrying.
+
+## PayPal and AI integrations
+
+### PayPal Developer Platform
+
+The server integrates PayPal Sandbox APIs for:
+
+- **Payouts API** to send sandbox payouts and retrieve payout batch status.
+- **Orders API** to create and capture wallet-funding orders.
+- **Invoicing API** to create/send invoices, generate invoice QR codes, retrieve invoice details, and record invoice payment where supported.
+- **Webhooks** to verify PayPal webhook signatures and process supported events such as completed captures.
+- **Reporting Balances API** to read the PayPal sandbox account balance where configured.
+
+The balance displayed in the wallet comes from Awaaz Pay's own ledger; it is not a live balance read from PayPal. The prototype uses Sandbox accounts and does not move real funds. PayPal invoice detail access can depend on which account created the invoice, so the demo also supports a locally registered Awaaz Pay QR fallback. See [PayPal integration notes](docs/PAYPAL_NOTES.md).
+
+### AI and speech
+
+- **Groq** is tried first for structured intent interpretation when configured; **Google Gemini** is the fallback provider. Provider model names are configured with `GROQ_MODEL` and `GEMINI_MODEL`.
+- The browser's **Web Speech API** provides speech recognition and speech synthesis. The app also supports typed input and visible controls.
+- AI produces structured interpretations and analysis. Application code validates requests and applies deterministic safety rules; AI does not call PayPal or move money.
+
+During development, **Claude and OpenAI Codex** were used as coding assistants for implementation, debugging, and refinement. They are not runtime dependencies of the deployed app.
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    A["📱 User's Phone\n(Voice Input via Web Speech API)"]
-    B["⚛️ React PWA Frontend\n(Vite + TypeScript)"]
-    C["🖥️ Express.js Backend\n(Node.js + TypeScript)"]
-    D["🧠 Intent Parser\n(Gemini / Groq + Regex Fallback)"]
-    E["🚨 Scam Signal Detector\n(Rule-based)"]
-    F["⚙️ Rules Engine\n(Deterministic)"]
-    G["💸 Payment Pipeline"]
-    H["💳 PayPal Sandbox APIs\n(Orders, Payouts, Invoicing)"]
-    I["🗄️ Neon PostgreSQL\n(primary database)"]
-    J["🛡️ Guardian Portal\n(/approve/:token)"]
-    K["📋 Family Dashboard\n(AG Grid)"]
-
-    A -->|Speech-to-Text| B
-    B -->|REST API| C
-    C --> D
-    C --> E
-    D -->|Parsed Intent| F
-    E -->|Risk Signals| F
-    F -->|Approved| G
-    F -->|Blocked / Needs Approval| J
-    G --> H
-    G --> I
-    H -->|Webhook Events| C
-    J -->|Approve / Deny| C
-    B --> K
-    K -->|Family Data| C
-    C --> I
+flowchart LR
+    U[User: voice, typing, taps, or QR] --> W[React PWA<br/>Speech, camera, accessible UI]
+    W --> API[Express API<br/>TypeScript]
+    API --> AI[Groq, then Gemini<br/>structured intent]
+    API --> RULES[Deterministic safety<br/>and payment rules]
+    RULES -->|allow and confirm| PP[PayPal Sandbox APIs]
+    RULES -->|review required| F[Family approval and dashboard]
+    API --> DB[(Neon PostgreSQL<br/>wallet ledger and app data)]
+    PP -->|verified webhooks and status| API
 ```
 
----
+## Technology
 
-## Tech Stack
+| Area | Tools |
+| --- | --- |
+| Web app | React 18, TypeScript, Vite, PWA plugin |
+| API | Node.js, Express, TypeScript, Zod |
+| Database | Neon Serverless PostgreSQL |
+| Family activity grid | AG Grid Community for React |
+| Speech and QR | Browser Web Speech API, camera APIs, `jsQR` fallback |
+| Authentication | WebAuthn/passkeys for the standard sign-in flow; separate family dashboard login |
+| Payments | PayPal Sandbox Orders, Payouts, Invoicing, Reporting Balances, and verified webhooks |
+| AI | Groq with Gemini fallback for structured language interpretation |
+| Hosting | Render configuration is included in `render.yaml` |
 
-| Layer | Technologies |
-|-------|-------------|
-| **Backend** | Node.js, Express, TypeScript, Neon PostgreSQL, Zod, Vitest |
-| **Frontend** | React 18, Vite, TypeScript, AG Grid Community, jsQR, @simplewebauthn/browser |
-| **Payments** | PayPal Sandbox (Orders API, Payouts API, Invoicing QR, Webhooks) |
-| **AI / LLM** | Google Gemini 1.5 Flash (primary), Groq Llama 3 (fallback), deterministic regex fallback |
-| **Safety** | Rule-based scam phrase detection, multi-tier trust model, anti-salami-slicing velocity checks |
+## Run locally
 
----
+### Requirements
 
-## Prerequisites
+- Node.js 20 or newer and npm
+- A Neon PostgreSQL database
+- PayPal Developer Sandbox REST app credentials
+- At least one AI provider key (Groq or Gemini) for model-backed intent parsing
+- A modern browser with Web Speech and camera support for voice and QR features; Chrome or Edge is recommended
 
-- **Node.js** >= 18
-- **npm** >= 9
-- A **PayPal Developer** sandbox account — [developer.paypal.com/dashboard](https://developer.paypal.com/dashboard)
-- A **Google AI Studio** API key for Gemini — [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-- *(Optional)* A **Groq** API key for fallback LLM — [console.groq.com](https://console.groq.com)
-
----
-
-## Setup and Run
+### Install
 
 ```bash
 git clone https://github.com/Vansh98789/Awaaz-Pay.git
 cd Awaaz-Pay
-cp .env.example .env
-# Fill in your PayPal sandbox and Gemini API keys in .env
 npm install
-npm run demo:reset    # Seeds database and LLM cache for demo
-npm run dev           # Starts backend (port 3001) and frontend (port 5173)
 ```
 
----
-
-## Environment Variables
-
-Create a `.env` file from `.env.example` and fill in the values:
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `PORT` | Backend server port | `3001` |
-| `NODE_ENV` | Environment mode | `development` |
-| `PUBLIC_BASE_URL` | Public URL for the backend | `http://localhost:3001` |
-| `PAYPAL_CLIENT_ID` | PayPal sandbox REST app Client ID | *(from PayPal dashboard)* |
-| `PAYPAL_CLIENT_SECRET` | PayPal sandbox REST app Secret | *(from PayPal dashboard)* |
-| `PAYPAL_BASE_URL` | PayPal sandbox base URL | `https://www.sandbox.paypal.com` |
-| `PAYPAL_API_BASE` | PayPal sandbox API base URL | `https://api-m.sandbox.paypal.com` |
-| `PAYPAL_WEBHOOK_ID` | PayPal webhook ID for event verification | *(from PayPal dashboard)* |
-| `PAYPAL_SANDBOX_MERCHANT_EMAIL` | Sandbox merchant account email | *(sandbox personal account)* |
-| `PAYPAL_SANDBOX_RECEIVER_EMAIL` | Sandbox receiver account email | *(sandbox personal account)* |
-| `GEMINI_API_KEY` | Google AI Studio API key | *(from AI Studio)* |
-| `GEMINI_MODEL` | Gemini model identifier | `gemini-3.5-flash` |
-| `GROQ_API_KEY` | Groq API key (optional fallback) | *(from Groq console)* |
-| `GROQ_MODEL` | Groq model identifier | `openai/gpt-oss-20b` |
-| `PROTOTYPE_MODE` | Use the shared `user_meena` demo wallet without passkey sign-in; production requires PayPal Sandbox | `false` locally, `true` only for the Render prototype |
-| `LLM_DEMO_CACHE` | Use cached LLM responses for demo; production rejects `true` | `false` |
-| `DEMO_SKIP_COOLING` | Skip contact cooling-off period in local demos only; production rejects `true` | `false` |
-| `DEMO_AUTH_BYPASS` | Bypass WebAuthn in local demos only; production rejects `true` | `false` |
-| `CONTACT_COOLING_OFF_HOURS` | Hours before a new contact becomes trusted | `24` |
-| `DATABASE_URL` | Neon PostgreSQL connection string | Required |
-
----
-
-## PayPal Sandbox Account Setup
-
-1. Go to [developer.paypal.com/dashboard](https://developer.paypal.com/dashboard)
-2. Create a **sandbox REST API app**
-3. Copy the **Client ID** and **Secret** into your `.env` file
-4. Create **2 sandbox personal accounts** (one for the merchant, one for the receiver)
-5. Set their emails in `PAYPAL_SANDBOX_MERCHANT_EMAIL` and `PAYPAL_SANDBOX_RECEIVER_EMAIL`
-
----
-
-## Test Credentials (Demo Mode)
-
-| Role | Name | User ID | Notes |
-|------|------|---------|-------|
-| **Demo User** | Meena | `user_meena` | Language: Hindi |
-| **Guardian** | Ramesh | `guardian_ramesh` | Approves Tier 3 payments |
-| **Trusted Contact** | Bhaiya | — | Tier 1 |
-| **Trusted Contact** | Sabzi wala | — | Tier 1 |
-| **Merchant** | Ravi Cabs | — | Tier 2 |
-
-**Starting Balance:** ₹2,300
-
-> **For offline demos**, set these environment variables:
-> ```
-> DEMO_AUTH_BYPASS=true
-> DEMO_SKIP_COOLING=true
-> LLM_DEMO_CACHE=true
-> ```
->
-> Demo flags are for local demos only. The server refuses to start in production if authentication bypass, cooling-off bypass, or cached demo responses are enabled.
-
----
-
-## Running Tests
+Copy `.env.example` to `.env`, then set the required database and service credentials. Never commit `.env` or production secrets.
 
 ```bash
-npm test                          # Runs all server (180 tests) and web (12 tests) tests
-npm test --workspace=server       # Server tests only
-npm test --workspace=web          # Web tests only
+npm run seed
+npm run dev
 ```
 
----
+The development scripts start the API on port `3001` and the Vite app on port `5173` by default. Open `http://localhost:5173`. The family dashboard is available at `/family`; the merchant demo is available at `/merchant`.
 
-## Known Limitations
+To create production bundles:
 
-- **Sandbox only** — All PayPal transactions use the sandbox environment; no real money is moved.
-- **Custodial simulation** — The wallet ledger is a simulated internal balance, not a real custodial wallet.
-- **Voice is a secondary signal** — Voice challenge is used only as a risk signal, never as the sole authentication factor.
-- **The app cannot hear scam calls** — Scam detection works only on text the user speaks into the app. It cannot intercept or listen to external phone calls.
-- **Browser support** — Web Speech API requires Chrome or Edge for speech recognition.
-- **LLM dependency** — Without API keys or demo cache, intent parsing falls back to regex patterns which handle common phrases but not all natural language variations.
+```bash
+npm run build
+```
 
----
+## Configuration
 
-## How We Built It
+The full template and comments are in [`.env.example`](.env.example). Core settings:
 
-We used AI coding tools (Google Gemini, Claude) extensively for code generation, debugging, and accelerating development. The system architecture, safety model, multi-tier trust design, rules engine logic, and all product decisions were designed and validated by the developer (Vansh Maheshwari). Every test was reviewed, every PayPal integration was manually verified against the sandbox, and the scam detection rules were hand-crafted from real-world Indian financial fraud patterns. The LLM is deliberately constrained — it parses intent and generates spoken responses but is never allowed to move money or invent financial figures. All financial computations are deterministic and code-driven.
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Neon PostgreSQL connection string; required |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | PayPal Sandbox REST app credentials |
+| `PAYPAL_API_BASE`, `PAYPAL_BASE_URL` | PayPal API endpoints; use Sandbox endpoints for this prototype |
+| `PAYPAL_WEBHOOK_ID` | Webhook ID used for signature verification |
+| `GROQ_API_KEY`, `GROQ_MODEL` | Primary configured AI provider |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Fallback AI provider |
+| `FAMILY_DASHBOARD_EMAIL`, `FAMILY_DASHBOARD_PASSWORD` | Separate family dashboard credentials |
+| `PUBLIC_BASE_URL` | Public API origin used for externally reachable callbacks and links |
+| `PROTOTYPE_MODE` | Enables the shared demo wallet behavior used by the hosted prototype; Sandbox-only |
 
----
+`DEMO_AUTH_BYPASS`, `DEMO_SKIP_COOLING`, and `LLM_DEMO_CACHE` are local demo switches. Production startup rejects these unsafe demo shortcuts when enabled. Do not enable them for a public deployment.
+
+## Accessibility and current limits
+
+Awaaz Pay is designed around voice interaction, with large controls, visible text, speech feedback, high contrast, keyboard interaction, and screen-reader announcements. Browser speech recognition quality depends on the browser, microphone, language, accent, and surroundings. Email addresses and other critical details should be reviewed before submission.
+
+The app has not been formally validated with blind or low-vision participants, and the repository's TalkBack/VoiceOver checklist is not marked complete. Treat accessibility as an active design goal, not a claim of certification. Screen-reader behavior and speech features can vary by browser and device; Chrome or Edge is recommended for the voice demo.
+
+Other prototype limits:
+
+- **Sandbox only:** no real money is transferred and the wallet balance is an application ledger simulation.
+- **No call interception:** scam checks use what the user says to the app and application context; the app cannot listen to external calls.
+- **AI availability:** if configured AI providers are unavailable, intent parsing may use deterministic fallback patterns with narrower language coverage.
+- **Invoice access:** PayPal invoice retrieval can be restricted to the account that created the invoice; the demo's local invoice registry and Awaaz Pay QR fallback address that flow for the prototype.
+
+## Project resources
+
+- [PayPal integration notes](docs/PAYPAL_NOTES.md)
+- [Safety and payment rules](docs/RULES.md)
+- [Design system](docs/DESIGN_SYSTEM.md)
+- [Postman collection](docs/postman_collection.json)
 
 ## License
 
-MIT — see [LICENSE](LICENSE) file.
+This project is released under the [MIT License](LICENSE).
+
+---
+
+## Try Awaaz Pay
+
+- [Open the live prototype](https://awaaz-pay-l7xv.onrender.com/)
+- [View the source code on GitHub](https://github.com/Vansh98789/Awaaz-Pay)
+- [Watch the project demo](https://youtu.be/fzFZ9h1mRKo?si=cYwxPxjm3ZasBeJr)
